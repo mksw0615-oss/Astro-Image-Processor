@@ -1,3 +1,84 @@
+from pathlib import Path
+
+from PIL import Image, ImageEnhance, ImageFilter
+
+
 def process(image_path):
     print("Planetary enhancement selected.")
-    print(f"Processing image: {image_path}")
+
+    image_path = clean_path(image_path)
+    path = Path(image_path)
+
+    if not path.exists():
+        print("Could not find that image. Check the path and try again.")
+        return
+
+    try:
+        image = Image.open(path)
+    except Exception:
+        print("Could not open that file as an image.")
+        return
+
+    print(f"Processing image: {path}")
+    print()
+    print("Recommended starting values:")
+    print("Brightness: 1.1")
+    print("Contrast:   1.3")
+    print("Color:      1.4")
+    print("Sharpness:  1.8")
+    print()
+
+    brightness = ask_for_number("Brightness", 1.1)
+    contrast = ask_for_number("Contrast", 1.3)
+    color = ask_for_number("Color balance / saturation", 1.4)
+    sharpness = ask_for_number("Sharpness", 1.8)
+
+    processed = enhance_planet(image, brightness, contrast, color, sharpness)
+
+    output_path = make_output_path(path)
+    processed.save(output_path)
+
+    print()
+    print(f"Enhanced image saved: {output_path}")
+
+    show_images(image, processed)
+
+
+def clean_path(image_path):
+    return image_path.strip().strip('"').strip("'")
+
+
+def ask_for_number(setting_name, default_value):
+    user_input = input(f"{setting_name} amount [{default_value}]: ").strip()
+
+    if user_input == "":
+        return default_value
+
+    try:
+        return float(user_input)
+    except ValueError:
+        print(f"Invalid number. Using {default_value}.")
+        return default_value
+
+
+def enhance_planet(image, brightness, contrast, color, sharpness):
+    image = image.convert("RGB")
+
+    image = ImageEnhance.Brightness(image).enhance(brightness)
+    image = ImageEnhance.Contrast(image).enhance(contrast)
+    image = ImageEnhance.Color(image).enhance(color)
+    image = ImageEnhance.Sharpness(image).enhance(sharpness)
+
+    return image.filter(ImageFilter.SHARPEN)
+
+
+def make_output_path(path):
+    output_folder = path.parent / "outputs"
+    output_folder.mkdir(exist_ok=True)
+
+    return output_folder / f"{path.stem}_planet_enhanced{path.suffix}"
+
+
+def show_images(original, processed):
+    original.show(title="Original Planet Image")
+    processed.show(title="Enhanced Planet Image")
