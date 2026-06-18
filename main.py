@@ -1,4 +1,6 @@
+import galaxy
 import moon
+import nebula
 import planet
 import stack
 
@@ -8,6 +10,8 @@ def show_menu():
     print("1. Planetary Enhancement")
     print("2. Moon Enhancement")
     print("3. Stack Images")
+    print("4. Galaxy Enhancement")
+    print("5. Nebula Enhancement")
     print("0. Exit")
 
 def main():
@@ -25,6 +29,14 @@ def main():
 
         elif choice == "3":
             stack.process()
+
+        elif choice == "4":
+            image_path = input("Enter the image path: ").strip()
+            galaxy.process(image_path)
+
+        elif choice == "5":
+            image_path = input("Enter the image path: ").strip()
+            nebula.process(image_path)
 
         elif choice == "0":
             print("Exiting.")

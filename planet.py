@@ -41,7 +41,7 @@ def process(image_path):
     print()
     print(f"Enhanced image saved: {output_path}")
 
-    show_images(image, processed)
+    show_processed_image(processed)
 
 
 def clean_path(image_path):
@@ -79,6 +79,5 @@ def make_output_path(path):
     return output_folder / f"{path.stem}_planet_enhanced{path.suffix}"
 
 
-def show_images(original, processed):
-    original.show(title="Original Image")
-    processed.show(title="Enhanced Image") 
+def show_processed_image(processed):
+    processed.show(title="Enhanced Planet Image")
