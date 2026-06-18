@@ -82,15 +82,6 @@ I am interested in aerospace engineering and astronomy, and I wanted to combine 
 
 ---
 
-## Future Improvements
-
-* Add automatic crater detection for lunar images
-* Track changes in planetary brightness over time
-* Build a simple GUI for easier use
-* Improve star detection accuracy using computer vision techniques
-
----
-
 ## Contact
 
 Instagram: https://instagram.com/engineeringthecosmos2026/
