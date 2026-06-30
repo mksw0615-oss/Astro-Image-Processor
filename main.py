@@ -3,6 +3,7 @@ import moon
 import nebula
 import planet
 import stack
+import calibrate
 
 def show_menu():
     print("Welcome to Astro Image Processor!")
@@ -12,6 +13,7 @@ def show_menu():
     print("3. Stack Images")
     print("4. Galaxy Enhancement")
     print("5. Nebula Enhancement")
+    print("6. Calibration")
     print("0. Exit")
 
 def main():
@@ -37,6 +39,9 @@ def main():
         elif choice == "5":
             image_path = input("Enter the image path: ").strip()
             nebula.process(image_path)
+
+        elif choice == "6":
+            calibrate.process()
 
         elif choice == "0":
             print("Exiting.")

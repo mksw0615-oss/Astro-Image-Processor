@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+
+
+DEFAULT_SETTINGS = {
+    "brightness": 1.05,
+    "contrast": 1.35,
+    "sharpness": 1.8,
+    "detail": 1.3,
+}
 
 
 def process(image_path):
@@ -21,17 +29,19 @@ def process(image_path):
 
     print(f"Processing image: {path}")
     print()
-    print("Recommended starting values:")
-    print("Brightness: 1.05")
-    print("Contrast:   1.35")
-    print("Sharpness:  1.8")
-    print("Detail:     1.3")
+    suggestions = suggest_moon_settings(image)
+
+    print("Suggested starting values based on this image:")
+    print(f"Brightness: {suggestions['brightness']}")
+    print(f"Contrast:   {suggestions['contrast']}")
+    print(f"Sharpness:  {suggestions['sharpness']}")
+    print(f"Detail:     {suggestions['detail']}")
     print()
 
-    brightness = ask_for_number("Brightness", 1.05)
-    contrast = ask_for_number("Contrast", 1.35)
-    sharpness = ask_for_number("Sharpness", 1.8)
-    detail = ask_for_number("Detail boost", 1.3)
+    brightness = ask_for_number("Brightness", suggestions["brightness"])
+    contrast = ask_for_number("Contrast", suggestions["contrast"])
+    sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
+    detail = ask_for_number("Detail boost", suggestions["detail"])
 
     processed = enhance_moon(image, brightness, contrast, sharpness, detail)
 
@@ -59,6 +69,74 @@ def ask_for_number(setting_name, default_value):
     except ValueError:
         print(f"Invalid input. Using {default_value}.")
         return default_value
+
+
+def suggest_moon_settings(image):
+    gray = image.convert("L")
+    stat = ImageStat.Stat(gray)
+    average_brightness = stat.mean[0]
+    contrast_spread = stat.stddev[0]
+    edge_strength = get_edge_strength(gray)
+    highlight_level = get_percentile(gray, 98)
+
+    brightness = DEFAULT_SETTINGS["brightness"]
+    contrast = DEFAULT_SETTINGS["contrast"]
+    sharpness = DEFAULT_SETTINGS["sharpness"]
+    detail = DEFAULT_SETTINGS["detail"]
+
+    if average_brightness < 75:
+        brightness = 1.25
+    elif average_brightness < 105:
+        brightness = 1.15
+    elif average_brightness > 190 or highlight_level > 245:
+        brightness = 0.9
+    elif average_brightness > 155:
+        brightness = 0.98
+
+    if contrast_spread < 35:
+        contrast = 1.55
+    elif contrast_spread < 55:
+        contrast = 1.4
+    elif contrast_spread > 85 or highlight_level > 245:
+        contrast = 1.15
+
+    if edge_strength < 7:
+        sharpness = 2.1
+        detail = 1.45
+    elif edge_strength < 12:
+        sharpness = 1.85
+        detail = 1.35
+    elif edge_strength > 22:
+        sharpness = 1.35
+        detail = 1.15
+
+    return {
+        "brightness": round(brightness, 2),
+        "contrast": round(contrast, 2),
+        "sharpness": round(sharpness, 2),
+        "detail": round(detail, 2),
+    }
+
+
+def get_edge_strength(gray):
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_stat = ImageStat.Stat(edges)
+
+    return edge_stat.mean[0]
+
+
+def get_percentile(gray, percentile):
+    histogram = gray.histogram()
+    target_count = gray.width * gray.height * (percentile / 100)
+    running_count = 0
+
+    for pixel_value, count in enumerate(histogram):
+        running_count += count
+
+        if running_count >= target_count:
+            return pixel_value
+
+    return 255
 
 
 def enhance_moon(image, brightness, contrast, sharpness, detail):

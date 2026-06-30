@@ -7,6 +7,7 @@ from PIL import Image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv"}
+MIN_ALIGNMENT_CONFIDENCE = 0.03
 
 
 def process():
@@ -176,6 +177,9 @@ def stack_images(image_paths):
         return None
 
     target_size = first_image.size
+    first_array = np.array(first_image, dtype=np.float32)
+    reference_array = center_bright_subject(first_array)
+    reference_gray = make_alignment_gray(reference_array)
     image_arrays = []
 
     for path in image_paths:
@@ -189,7 +193,9 @@ def stack_images(image_paths):
             print(f"Resizing {path.name} to match the first image.")
             image = image.resize(target_size)
 
-        image_arrays.append(np.array(image, dtype=np.float32))
+        image_array = np.array(image, dtype=np.float32)
+        aligned_array = align_to_reference(image_array, reference_gray)
+        image_arrays.append(aligned_array)
 
     if len(image_arrays) == 0:
         return None
@@ -205,3 +211,71 @@ def open_image(path):
         return Image.open(path).convert("RGB")
     except Exception:
         return None
+
+
+def center_bright_subject(image_array):
+    gray = make_alignment_gray(image_array)
+    center_x, center_y = find_bright_subject_center(gray)
+
+    if center_x is None:
+        return image_array
+
+    height, width = gray.shape
+    shift_x = (width / 2) - center_x
+    shift_y = (height / 2) - center_y
+
+    return shift_image(image_array, shift_x, shift_y)
+
+
+def find_bright_subject_center(gray):
+    threshold = np.percentile(gray, 85)
+    bright_pixels = gray >= threshold
+
+    if np.count_nonzero(bright_pixels) == 0:
+        return None, None
+
+    weights = gray * bright_pixels
+    total_weight = np.sum(weights)
+
+    if total_weight <= 0:
+        return None, None
+
+    y_coordinates, x_coordinates = np.indices(gray.shape)
+    center_x = np.sum(x_coordinates * weights) / total_weight
+    center_y = np.sum(y_coordinates * weights) / total_weight
+
+    return center_x, center_y
+
+
+def align_to_reference(image_array, reference_gray):
+    current_gray = make_alignment_gray(image_array)
+    shift, confidence = cv2.phaseCorrelate(reference_gray, current_gray)
+
+    if confidence < MIN_ALIGNMENT_CONFIDENCE:
+        print("Could not confidently align one frame. Using its centered position.")
+        return center_bright_subject(image_array)
+
+    shift_x, shift_y = shift
+    return shift_image(image_array, -shift_x, -shift_y)
+
+
+def make_alignment_gray(image_array):
+    image_array = np.clip(image_array, 0, 255).astype(np.uint8)
+    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    return gray.astype(np.float32)
+
+
+def shift_image(image_array, shift_x, shift_y):
+    height, width = image_array.shape[:2]
+    transform = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+
+    return cv2.warpAffine(
+        image_array,
+        transform,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
