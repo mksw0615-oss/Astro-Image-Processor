@@ -77,28 +77,36 @@ def suggest_moon_settings(image):
     average_brightness = stat.mean[0]
     contrast_spread = stat.stddev[0]
     edge_strength = get_edge_strength(gray)
-    highlight_level = get_percentile(gray, 98)
+    brightest_pixel = get_brightest_pixel(gray)
 
     brightness = DEFAULT_SETTINGS["brightness"]
     contrast = DEFAULT_SETTINGS["contrast"]
     sharpness = DEFAULT_SETTINGS["sharpness"]
     detail = DEFAULT_SETTINGS["detail"]
 
-    if average_brightness < 75:
+    if brightest_pixel >= 240:
+        brightness = 0.8
+    elif brightest_pixel >= 220:
+        brightness = 0.9
+    elif brightest_pixel >= 180:
+        brightness = 0.98
+    elif average_brightness < 75:
         brightness = 1.25
     elif average_brightness < 105:
         brightness = 1.15
-    elif average_brightness > 190 or highlight_level > 245:
+    elif average_brightness > 175:
         brightness = 0.9
-    elif average_brightness > 155:
+    elif average_brightness > 145:
         brightness = 0.98
 
     if contrast_spread < 35:
         contrast = 1.55
     elif contrast_spread < 55:
         contrast = 1.4
-    elif contrast_spread > 85 or highlight_level > 245:
+    elif contrast_spread > 85:
         contrast = 1.15
+    elif brightest_pixel >= 220:
+        contrast = 1.2
 
     if edge_strength < 7:
         sharpness = 2.1
@@ -109,6 +117,10 @@ def suggest_moon_settings(image):
     elif edge_strength > 22:
         sharpness = 1.35
         detail = 1.15
+
+    if brightest_pixel >= 220:
+        sharpness = 0.9
+        detail = 0.9
 
     return {
         "brightness": round(brightness, 2),
@@ -137,6 +149,10 @@ def get_percentile(gray, percentile):
             return pixel_value
 
     return 255
+
+
+def get_brightest_pixel(gray):
+    return max(gray.getextrema())
 
 
 def enhance_moon(image, brightness, contrast, sharpness, detail):

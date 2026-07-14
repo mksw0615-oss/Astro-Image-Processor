@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+
+
+DEFAULT_SETTINGS = {
+    "brightness": 1.25,
+    "contrast": 1.45,
+    "color": 1.35,
+    "sharpness": 1.25,
+    "background": 0.90,
+}
 
 
 def process(image_path):
@@ -21,19 +30,21 @@ def process(image_path):
 
     print(f"Processing image: {path}")
     print()
-    print("Recommended starting values:")
-    print("Brightness: 1.25")
-    print("Contrast:   1.45")
-    print("Color:      1.35")
-    print("Sharpness:  1.25")
-    print("Background darkening: 0.90")
+    suggestions = suggest_galaxy_settings(image)
+
+    print("Suggested starting values based on this image:")
+    print(f"Brightness: {suggestions['brightness']}")
+    print(f"Contrast:   {suggestions['contrast']}")
+    print(f"Color:      {suggestions['color']}")
+    print(f"Sharpness:  {suggestions['sharpness']}")
+    print(f"Background darkening: {suggestions['background']}")
     print()
 
-    brightness = ask_for_number("Brightness", 1.25)
-    contrast = ask_for_number("Contrast", 1.45)
-    color = ask_for_number("Color balance / saturation", 1.35)
-    sharpness = ask_for_number("Sharpness", 1.25)
-    background = ask_for_number("Background darkening", 0.90)
+    brightness = ask_for_number("Brightness", suggestions["brightness"])
+    contrast = ask_for_number("Contrast", suggestions["contrast"])
+    color = ask_for_number("Color balance / saturation", suggestions["color"])
+    sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
+    background = ask_for_number("Background darkening", suggestions["background"])
 
     processed = enhance_galaxy(image, brightness, contrast, color, sharpness, background)
 
@@ -61,6 +72,78 @@ def ask_for_number(setting_name, default_value):
     except ValueError:
         print(f"Invalid input. Using {default_value}.")
         return default_value
+
+
+def suggest_galaxy_settings(image):
+    rgb = image.convert("RGB")
+    gray = image.convert("L")
+    stat = ImageStat.Stat(gray)
+    average_brightness = stat.mean[0]
+    contrast_spread = stat.stddev[0]
+    edge_strength = get_edge_strength(gray)
+    color_strength = get_color_strength(rgb)
+
+    brightness = DEFAULT_SETTINGS["brightness"]
+    contrast = DEFAULT_SETTINGS["contrast"]
+    color = DEFAULT_SETTINGS["color"]
+    sharpness = DEFAULT_SETTINGS["sharpness"]
+    background = DEFAULT_SETTINGS["background"]
+
+    if average_brightness < 70:
+        brightness = 1.4
+        background = 0.85
+    elif average_brightness < 100:
+        brightness = 1.3
+    elif average_brightness > 200:
+        brightness = 1.05
+        background = 0.95
+    elif average_brightness > 170:
+        brightness = 1.15
+
+    if contrast_spread < 30:
+        contrast = 1.65
+    elif contrast_spread < 50:
+        contrast = 1.55
+    elif contrast_spread > 80:
+        contrast = 1.25
+
+    if color_strength < 25:
+        color = 1.6
+    elif color_strength < 40:
+        color = 1.45
+    elif color_strength > 70:
+        color = 1.15
+
+    if edge_strength < 8:
+        sharpness = 1.45
+    elif edge_strength < 13:
+        sharpness = 1.35
+    elif edge_strength > 20:
+        sharpness = 1.05
+
+    return {
+        "brightness": round(brightness, 2),
+        "contrast": round(contrast, 2),
+        "color": round(color, 2),
+        "sharpness": round(sharpness, 2),
+        "background": round(background, 2),
+    }
+
+
+def get_edge_strength(gray):
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_stat = ImageStat.Stat(edges)
+
+    return edge_stat.mean[0]
+
+
+def get_color_strength(rgb):
+    r, g, b = rgb.split()
+    r_stat = ImageStat.Stat(r)
+    g_stat = ImageStat.Stat(g)
+    b_stat = ImageStat.Stat(b)
+
+    return (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
 
 
 def enhance_galaxy(image, brightness, contrast, color, sharpness, background):

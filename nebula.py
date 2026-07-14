@@ -1,6 +1,16 @@
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+
+
+DEFAULT_SETTINGS = {
+    "brightness": 1.30,
+    "contrast": 1.40,
+    "color": 1.60,
+    "sharpness": 1.20,
+    "background": 0.88,
+    "glow": 0.25,
+}
 
 
 def process(image_path):
@@ -21,21 +31,23 @@ def process(image_path):
 
     print(f"Processing image: {path}")
     print()
-    print("Recommended starting values:")
-    print("Brightness: 1.30")
-    print("Contrast:   1.40")
-    print("Color:      1.60")
-    print("Sharpness:  1.20")
-    print("Background darkening: 0.88")
-    print("Glow/detail boost: 0.25")
+    suggestions = suggest_nebula_settings(image)
+
+    print("Suggested starting values based on this image:")
+    print(f"Brightness: {suggestions['brightness']}")
+    print(f"Contrast:   {suggestions['contrast']}")
+    print(f"Color:      {suggestions['color']}")
+    print(f"Sharpness:  {suggestions['sharpness']}")
+    print(f"Background darkening: {suggestions['background']}")
+    print(f"Glow/detail boost: {suggestions['glow']}")
     print()
 
-    brightness = ask_for_number("Brightness", 1.30)
-    contrast = ask_for_number("Contrast", 1.40)
-    color = ask_for_number("Color balance / saturation", 1.60)
-    sharpness = ask_for_number("Sharpness", 1.20)
-    background = ask_for_number("Background darkening", 0.88)
-    glow = ask_for_number("Glow/detail boost", 0.25)
+    brightness = ask_for_number("Brightness", suggestions["brightness"])
+    contrast = ask_for_number("Contrast", suggestions["contrast"])
+    color = ask_for_number("Color balance / saturation", suggestions["color"])
+    sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
+    background = ask_for_number("Background darkening", suggestions["background"])
+    glow = ask_for_number("Glow/detail boost", suggestions["glow"])
 
     processed = enhance_nebula(image, brightness, contrast, color, sharpness, background, glow)
 
@@ -63,6 +75,83 @@ def ask_for_number(setting_name, default_value):
     except ValueError:
         print(f"Invalid input. Using {default_value}.")
         return default_value
+
+
+def suggest_nebula_settings(image):
+    rgb = image.convert("RGB")
+    gray = image.convert("L")
+    stat = ImageStat.Stat(gray)
+    average_brightness = stat.mean[0]
+    contrast_spread = stat.stddev[0]
+    edge_strength = get_edge_strength(gray)
+    color_strength = get_color_strength(rgb)
+
+    brightness = DEFAULT_SETTINGS["brightness"]
+    contrast = DEFAULT_SETTINGS["contrast"]
+    color = DEFAULT_SETTINGS["color"]
+    sharpness = DEFAULT_SETTINGS["sharpness"]
+    background = DEFAULT_SETTINGS["background"]
+    glow = DEFAULT_SETTINGS["glow"]
+
+    if average_brightness < 70:
+        brightness = 1.5
+        background = 0.82
+    elif average_brightness < 100:
+        brightness = 1.4
+    elif average_brightness > 190:
+        brightness = 1.1
+        background = 0.95
+    elif average_brightness > 160:
+        brightness = 1.2
+
+    if contrast_spread < 30:
+        contrast = 1.6
+    elif contrast_spread < 50:
+        contrast = 1.5
+    elif contrast_spread > 80:
+        contrast = 1.2
+
+    if color_strength < 20:
+        color = 1.85
+    elif color_strength < 35:
+        color = 1.7
+    elif color_strength > 60:
+        color = 1.3
+
+    if edge_strength < 8:
+        sharpness = 1.4
+        glow = 0.35
+    elif edge_strength < 13:
+        sharpness = 1.25
+        glow = 0.3
+    elif edge_strength > 20:
+        sharpness = 1.0
+        glow = 0.15
+
+    return {
+        "brightness": round(brightness, 2),
+        "contrast": round(contrast, 2),
+        "color": round(color, 2),
+        "sharpness": round(sharpness, 2),
+        "background": round(background, 2),
+        "glow": round(glow, 2),
+    }
+
+
+def get_edge_strength(gray):
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_stat = ImageStat.Stat(edges)
+
+    return edge_stat.mean[0]
+
+
+def get_color_strength(rgb):
+    r, g, b = rgb.split()
+    r_stat = ImageStat.Stat(r)
+    g_stat = ImageStat.Stat(g)
+    b_stat = ImageStat.Stat(b)
+
+    return (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
 
 
 def enhance_nebula(image, brightness, contrast, color, sharpness, background, glow):
