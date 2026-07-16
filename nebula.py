@@ -14,8 +14,6 @@ DEFAULT_SETTINGS = {
 
 
 def process(image_path):
-    print("Nebula enhancement selected.")
-
     image_path = clean_path(image_path)
     path = Path(image_path)
 
@@ -29,17 +27,16 @@ def process(image_path):
         print("Could not open that file as an image.")
         return
 
-    print(f"Processing image: {path}")
     print()
     suggestions = suggest_nebula_settings(image)
 
     print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}")
-    print(f"Contrast:   {suggestions['contrast']}")
-    print(f"Color:      {suggestions['color']}")
-    print(f"Sharpness:  {suggestions['sharpness']}")
-    print(f"Background darkening: {suggestions['background']}")
-    print(f"Glow/detail boost: {suggestions['glow']}")
+    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
+    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
+    print(f"Color:      {suggestions['color']}  -> boosts or reduces color saturation")
+    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
+    print(f"Background darkening: {suggestions['background']}  -> darkens the darker parts more or less")
+    print(f"Glow/detail boost: {suggestions['glow']}  -> adds or reduces soft glow and detail")
     print()
 
     brightness = ask_for_number("Brightness", suggestions["brightness"])

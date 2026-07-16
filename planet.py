@@ -12,8 +12,6 @@ DEFAULT_SETTINGS = {
 
 
 def process(image_path):
-    print("Planetary enhancement selected.")
-    
     image_path = clean_path(image_path)
     path = Path(image_path)
 
@@ -27,15 +25,14 @@ def process(image_path):
         print("Could not open that file as an image.")
         return
     
-    print(f"Processing image: {path}")
     print()
     suggestions = suggest_planet_settings(image)
 
     print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}")
-    print(f"Contrast:   {suggestions['contrast']}")
-    print(f"Color:      {suggestions['color']}")
-    print(f"Sharpness:  {suggestions['sharpness']}")
+    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
+    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
+    print(f"Color:      {suggestions['color']}  -> boosts or reduces color saturation")
+    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
     print()
 
     brightness = ask_for_number("Brightness", suggestions["brightness"])
@@ -85,7 +82,6 @@ def suggest_planet_settings(image):
     color = DEFAULT_SETTINGS["color"]
     sharpness = DEFAULT_SETTINGS["sharpness"]
 
-    # Adjust brightness based on how dark the image is
     if average_brightness < 60:
         brightness = 1.35
     elif average_brightness < 90:
@@ -95,29 +91,26 @@ def suggest_planet_settings(image):
     elif average_brightness > 170:
         brightness = 1.05
 
-    # Adjust contrast based on contrast spread
     if contrast_spread < 30:
-        contrast = 1.55
+        contrast = 1.3
     elif contrast_spread < 50:
-        contrast = 1.4
+        contrast = 1.2
     elif contrast_spread > 80:
-        contrast = 1.15
+        contrast = 1.05
 
-    # Adjust color saturation based on color strength
     if color_strength < 25:
-        color = 1.65
+        color = 1.35
     elif color_strength < 40:
-        color = 1.5
-    elif color_strength > 70:
         color = 1.2
+    elif color_strength > 70:
+        color = 1.05
 
-    # Adjust sharpness based on edge strength
     if edge_strength < 8:
-        sharpness = 2.0
+        sharpness = 1.2
     elif edge_strength < 13:
-        sharpness = 1.85
+        sharpness = 1.1
     elif edge_strength > 20:
-        sharpness = 1.5
+        sharpness = 1.0
 
     return {
         "brightness": round(brightness, 2),
@@ -140,7 +133,6 @@ def get_color_strength(rgb):
     g_stat = ImageStat.Stat(g)
     b_stat = ImageStat.Stat(b)
     
-    # Calculate average of the standard deviations across color channels
     color_variance = (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
 
     return color_variance
@@ -152,9 +144,13 @@ def enhance_planet(image, brightness, contrast, color, sharpness):
     image = ImageEnhance.Brightness(image).enhance(brightness)
     image = ImageEnhance.Contrast(image).enhance(contrast)
     image = ImageEnhance.Color(image).enhance(color)
-    image = ImageEnhance.Sharpness(image).enhance(sharpness)
 
-    return image.filter(ImageFilter.SHARPEN)
+    if sharpness > 1.2:
+        image = ImageEnhance.Sharpness(image).enhance(sharpness)
+    else:
+        image = image.filter(ImageFilter.SMOOTH)
+
+    return image.filter(ImageFilter.SMOOTH)
 
 
 def make_output_path(path):
@@ -165,5 +161,4 @@ def make_output_path(path):
 
 
 def show_images(original, processed):
-    original.show(title="Original Image")
     processed.show(title="Enhanced Image") 

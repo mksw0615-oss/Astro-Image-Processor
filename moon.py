@@ -12,8 +12,6 @@ DEFAULT_SETTINGS = {
 
 
 def process(image_path):
-    print("Moon enhancement selected.")
-
     image_path = clean_path(image_path)
     path = Path(image_path)
 
@@ -27,15 +25,14 @@ def process(image_path):
         print("Could not open that file as an image.")
         return
 
-    print(f"Processing image: {path}")
     print()
     suggestions = suggest_moon_settings(image)
 
     print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}")
-    print(f"Contrast:   {suggestions['contrast']}")
-    print(f"Sharpness:  {suggestions['sharpness']}")
-    print(f"Detail:     {suggestions['detail']}")
+    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
+    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
+    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
+    print(f"Detail:     {suggestions['detail']}  -> adds or reduces extra fine texture")
     print()
 
     brightness = ask_for_number("Brightness", suggestions["brightness"])
