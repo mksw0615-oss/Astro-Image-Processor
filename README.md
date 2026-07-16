@@ -24,7 +24,7 @@ The system can:
 * Load astronomical images
 * Reduce noise caused by atmosphere and camera limitations
 * Enhance contrast and sharpness
-* Apply object-specific processing modes (Mars, Moon, stars, etc.)
+* Apply object-specific processing modes (Planet, Moon, galaxy, etc.)
 * Output improved images for analysis and visualization
 
 ---
@@ -33,20 +33,14 @@ The system can:
 
 The project uses configurable modes depending on the target object:
 
-* **Mars Mode**
-
-  * Color correction (red/orange enhancement)
-  * Detail sharpening
-
-* **Moon Mode**
-
-  * Edge enhancement for craters and surface features
-  * High-contrast mapping
-
-* **Star Field Mode**
-
-  * Brightness thresholding
-  * Star detection and counting
+* Planet Mode
+* Moon Mode
+* Galaxy Mode
+* Nebula Mode
+** These modes suggest four universal values (Sharpness, Color, Brightness, Contrast) based on the image attached. **
+  
+* Stacking
+* Calibration - Recommended before using other modes.
 
 ---
 
@@ -64,14 +58,13 @@ The project uses configurable modes depending on the target object:
 ```
 astro-image-processor/
 │
-├── main.py              # Runs the processing pipeline
-├── processing.py       # Core image processing functions
-├── configs.py          # Settings for each mode (Mars, Moon, Stars)
-├── examples/           # Sample telescope images
-│   ├── mars.jpg
-│   ├── moon.jpg
-│   └── stars.jpg
-└── outputs/            # Processed results
+├── main.py             # Runs the processing pipeline. Asks the user for the image and automatically detects the type of the object.
+├── calibrate.py        # Calibration feature which corrects imperfections introduced by the camera and optics before enhancement.
+├── stack.py            # Stacks each frames of photos for a fainter or darker object.
+├── moon.py             # Suggests values specific to the photo to add more detailed visuals of the moon's terrain.
+├── galaxy.py           # Suggets values specific to the photo to make the galaxy more vivid and detailed.
+├── nebula.py           # Suggests values specific to the image to improve the nebula's astonishing colors.
+└── planet.py           # Suggetst values specific to the image to give the user a clearer view of the planet.
 ```
 
 ---
