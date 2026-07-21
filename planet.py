@@ -1,13 +1,14 @@
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageStat
 
 
 DEFAULT_SETTINGS = {
-    "brightness": 1.1,
-    "contrast": 1.3,
-    "color": 1.4,
-    "sharpness": 1.8,
+    "local_contrast": 0.75,
+    "chromatic_aberration": 0.35,
+    "deconvolution": 0.55,
+    "crop_padding": 8,
 }
 
 
@@ -18,29 +19,29 @@ def process(image_path):
     if not path.exists():
         print("Could not find that image. Check the path and try again.")
         return
-    
+
     try:
         image = Image.open(path)
     except Exception:
         print("Could not open that file as an image.")
         return
-    
+
     print()
     suggestions = suggest_planet_settings(image)
 
-    print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
-    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
-    print(f"Color:      {suggestions['color']}  -> boosts or reduces color saturation")
-    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
+    print("What each value does:")
+    print("Crop padding -> crops around the main object")
+    print("Local contrast -> increases local detail without changing the whole image globally")
+    print("Chromatic aberration -> removes color fringing around edges")
+    print("Deconvolution/sharpening -> sharpens the object and restores detail")
     print()
 
-    brightness = ask_for_number("Brightness", suggestions["brightness"])
-    contrast = ask_for_number("Contrast", suggestions["contrast"])
-    color = ask_for_number("Color balance / saturation", suggestions["color"])
-    sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
+    crop_padding = ask_for_int("Crop padding", suggestions["crop_padding"])
+    local_contrast = ask_for_number("Local contrast", suggestions["local_contrast"])
+    chromatic_aberration = ask_for_number("Chromatic aberration", suggestions["chromatic_aberration"])
+    deconvolution = ask_for_number("Deconvolution/sharpening", suggestions["deconvolution"])
 
-    processed = enhance_planet(image, brightness, contrast, color, sharpness)
+    processed = enhance_planet(image, crop_padding, local_contrast, chromatic_aberration, deconvolution)
 
     output_path = make_output_path(path)
     processed.save(output_path)
@@ -48,19 +49,34 @@ def process(image_path):
     print()
     print(f"Enhanced image saved: {output_path}")
 
-    show_images(image, processed)
+    show_processed_image(processed)
 
 
 def clean_path(image_path):
     return image_path.strip().strip('"').strip("'")
 
 
-def ask_for_number(setting_name, default_value):
-    user_input = input(f"{setting_name} amount [{default_value}]: ").strip()
-    
+def ask_for_int(setting_name, default_value):
+    user_input = input(f"{setting_name} [{default_value}]: ").strip()
+
     if user_input == "":
         return default_value
-    
+
+    try:
+        value = int(user_input)
+    except ValueError:
+        print(f"Invalid input. Using {default_value}.")
+        return default_value
+
+    return value
+
+
+def ask_for_number(setting_name, default_value):
+    user_input = input(f"{setting_name} [{default_value}]: ").strip()
+
+    if user_input == "":
+        return default_value
+
     try:
         return float(user_input)
     except ValueError:
@@ -69,89 +85,121 @@ def ask_for_number(setting_name, default_value):
 
 
 def suggest_planet_settings(image):
-    rgb = image.convert("RGB")
     gray = image.convert("L")
     stat = ImageStat.Stat(gray)
     average_brightness = stat.mean[0]
-    contrast_spread = stat.stddev[0]
-    edge_strength = get_edge_strength(gray)
-    color_strength = get_color_strength(rgb)
 
-    brightness = DEFAULT_SETTINGS["brightness"]
-    contrast = DEFAULT_SETTINGS["contrast"]
-    color = DEFAULT_SETTINGS["color"]
-    sharpness = DEFAULT_SETTINGS["sharpness"]
+    local_contrast = DEFAULT_SETTINGS["local_contrast"]
+    chromatic_aberration = DEFAULT_SETTINGS["chromatic_aberration"]
+    deconvolution = DEFAULT_SETTINGS["deconvolution"]
+    crop_padding = DEFAULT_SETTINGS["crop_padding"]
 
-    if average_brightness < 60:
-        brightness = 1.35
-    elif average_brightness < 90:
-        brightness = 1.2
-    elif average_brightness > 200:
-        brightness = 0.95
-    elif average_brightness > 170:
-        brightness = 1.05
-
-    if contrast_spread < 30:
-        contrast = 1.3
-    elif contrast_spread < 50:
-        contrast = 1.2
-    elif contrast_spread > 80:
-        contrast = 1.05
-
-    if color_strength < 25:
-        color = 1.35
-    elif color_strength < 40:
-        color = 1.2
-    elif color_strength > 70:
-        color = 1.05
-
-    if edge_strength < 8:
-        sharpness = 1.2
-    elif edge_strength < 13:
-        sharpness = 1.1
-    elif edge_strength > 20:
-        sharpness = 1.0
+    if average_brightness < 80:
+        local_contrast = 0.9
+        deconvolution = 0.7
+        crop_padding = 10
+    elif average_brightness > 160:
+        local_contrast = 0.6
+        crop_padding = 6
 
     return {
-        "brightness": round(brightness, 2),
-        "contrast": round(contrast, 2),
-        "color": round(color, 2),
-        "sharpness": round(sharpness, 2),
+        "local_contrast": round(local_contrast, 2),
+        "chromatic_aberration": round(chromatic_aberration, 2),
+        "deconvolution": round(deconvolution, 2),
+        "crop_padding": crop_padding,
     }
 
 
-def get_edge_strength(gray):
-    edges = gray.filter(ImageFilter.FIND_EDGES)
-    edge_stat = ImageStat.Stat(edges)
-
-    return edge_stat.mean[0]
-
-
-def get_color_strength(rgb):
-    r, g, b = rgb.split()
-    r_stat = ImageStat.Stat(r)
-    g_stat = ImageStat.Stat(g)
-    b_stat = ImageStat.Stat(b)
-    
-    color_variance = (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
-
-    return color_variance
-
-
-def enhance_planet(image, brightness, contrast, color, sharpness):
+def enhance_planet(image, crop_padding, local_contrast, chromatic_aberration, deconvolution):
     image = image.convert("RGB")
+    cropped = crop_around_object(image, padding=max(0, int(crop_padding)))
 
-    image = ImageEnhance.Brightness(image).enhance(brightness)
-    image = ImageEnhance.Contrast(image).enhance(contrast)
-    image = ImageEnhance.Color(image).enhance(color)
+    if cropped.size != image.size:
+        return cropped.resize(image.size, Image.Resampling.LANCZOS)
 
-    if sharpness > 1.2:
-        image = ImageEnhance.Sharpness(image).enhance(sharpness)
-    else:
-        image = image.filter(ImageFilter.SMOOTH)
+    local_contrast_image = apply_local_contrast(cropped, strength=max(0.0, float(local_contrast)))
+    chroma_corrected = correct_chromatic_aberration(local_contrast_image, amount=max(0.0, float(chromatic_aberration)))
+    return apply_deconvolution(chroma_corrected, strength=max(0.0, float(deconvolution)))
 
-    return image.filter(ImageFilter.SMOOTH)
 
+def apply_local_contrast(image, strength):
+    rgb = np.array(image, dtype=np.float32)
+    luminance = np.clip(
+        rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114,
+        0,
+        255,
+    )
+
+    blurred = np.array(Image.fromarray(luminance.astype("uint8")).filter(ImageFilter.GaussianBlur(radius=2)), dtype=np.float32)
+    enhanced_luminance = np.clip(luminance + (luminance - blurred) * strength, 0, 255)
+    scale = np.clip(enhanced_luminance / (luminance + 1e-6), 0.0, 3.0)
+
+    adjusted = rgb * np.stack([scale, scale, scale], axis=-1)
+    adjusted = np.clip(adjusted, 0, 255).astype("uint8")
+
+    return Image.fromarray(adjusted, mode="RGB")
+
+
+def correct_chromatic_aberration(image, amount):
+    if amount <= 0:
+        return image
+
+    rgb = np.array(image, dtype=np.float32)
+    red = rgb[..., 0]
+    green = rgb[..., 1]
+    blue = rgb[..., 2]
+    shift = max(1, int(round(amount * 3)))
+    shifted_red = np.roll(red, shift, axis=1)
+    shifted_blue = np.roll(blue, -shift, axis=1)
+
+    corrected = np.stack(
+        [
+            np.clip(0.85 * red + 0.15 * shifted_red, 0, 255),
+            green,
+            np.clip(0.85 * blue + 0.15 * shifted_blue, 0, 255),
+        ],
+        axis=-1,
+    )
+
+    return Image.fromarray(corrected.astype("uint8"), mode="RGB")
+
+
+def apply_deconvolution(image, strength):
+    if strength <= 0:
+        return image
+
+    percent = int(120 + strength * 180)
+    return image.filter(ImageFilter.UnsharpMask(radius=1, percent=percent, threshold=3))
+
+
+def crop_around_object(image, padding=8):
+    gray = image.convert("L")
+    width, height = gray.size
+
+    bright_pixels = []
+    for y in range(height):
+        for x in range(width):
+            value = gray.getpixel((x, y))
+            if value >= 120:
+                bright_pixels.append((x, y))
+
+    if not bright_pixels:
+        return image.copy()
+
+    min_x = min(x for x, _ in bright_pixels)
+    max_x = max(x for x, _ in bright_pixels)
+    min_y = min(y for _, y in bright_pixels)
+    max_y = max(y for _, y in bright_pixels)
+
+    left = max(0, min_x - padding)
+    upper = max(0, min_y - padding)
+    right = min(image.width, max_x + padding)
+    lower = min(image.height, max_y + padding)
+
+    if right - left < 10 or lower - upper < 10:
+        return image.copy()
+
+    return image.crop((left, upper, right, lower))
 
 def make_output_path(path):
     output_folder = path.parent / "outputs"
@@ -160,5 +208,5 @@ def make_output_path(path):
     return output_folder / f"{path.stem}_planet_enhanced{path.suffix}"
 
 
-def show_images(original, processed):
-    processed.show(title="Enhanced Image") 
+def show_processed_image(processed):
+    processed.show(title="Enhanced Planet Image") 

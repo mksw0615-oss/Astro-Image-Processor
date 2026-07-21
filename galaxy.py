@@ -29,12 +29,12 @@ def process(image_path):
     print()
     suggestions = suggest_galaxy_settings(image)
 
-    print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
-    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
-    print(f"Color:      {suggestions['color']}  -> boosts or reduces color saturation")
-    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
-    print(f"Background darkening: {suggestions['background']}  -> darkens the darker parts more or less")
+    print("What each value does:")
+    print("Brightness -> makes the whole image lighter or darker")
+    print("Contrast -> increases or reduces the difference between bright and dark areas")
+    print("Color -> boosts or reduces color saturation")
+    print("Sharpness -> makes edges crisper or softer")
+    print("Background darkening -> darkens the darker parts more or less")
     print()
 
     brightness = ask_for_number("Brightness", suggestions["brightness"])

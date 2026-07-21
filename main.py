@@ -2,10 +2,12 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageStat
 
+import calibrate
 import galaxy
 import moon
 import nebula
 import planet
+import stack
 
 
 def detect_image_type(image_path):
@@ -31,11 +33,28 @@ def detect_image_type(image_path):
     point_like_score = get_point_like_score(gray)
 
     if (
-        brightest_pixel >= 220
+        brightest_pixel >= 210
         and bright_object_score > 0.5
-        and contrast_spread > 20
-        and saturation < 80
-        and point_like_score < 0.85
+        and contrast_spread > 18
+        and saturation < 90
+        and point_like_score < 0.95
+    ):
+        return "moon"
+
+    if (
+        brightest_pixel >= 220
+        and bright_object_score > 0.75
+        and point_like_score > 0.85
+        and contrast_spread > 15
+    ):
+        return "moon"
+
+    if (
+        brightest_pixel >= 190
+        and bright_object_score > 0.65
+        and contrast_spread > 15
+        and saturation < 100
+        and point_like_score > 0.5
     ):
         return "moon"
 
@@ -141,33 +160,46 @@ def get_point_like_score(gray):
 def main():
     print("Welcome to Astro Image Processor!")
     print()
+    print("Type 'calibration' to enter calibration mode")
+    print("Type 'stack' to enter stacking mode")
+    print("Otherwise, enter the path to an image file")
+    print()
 
     while True:
-        image_path = input("Enter the image path: ").strip()
-        if not image_path:
-            print("No image path provided. Exiting.")
+        user_input = input("Enter 'calibration', 'stack', or an image path: ").strip()
+        if not user_input:
+            print("No input provided. Exiting.")
             break
 
-        print("Processing image...")
+        cleaned_input = user_input.strip().strip('"').strip("'")
+        lowered_input = cleaned_input.lower()
 
-        image_path = image_path.strip().strip('"').strip("'")
-        detected_type = detect_image_type(image_path)
+        if lowered_input == "calibration":
+            calibrate.process()
+            continue
+
+        if lowered_input == "stack":
+            stack.process()
+            continue
+
+        print("Processing image...")
+        detected_type = detect_image_type(cleaned_input)
 
         if detected_type is None:
             continue
 
         if detected_type == "moon":
             print("Selected mode: moon")
-            moon.process(image_path)
+            moon.process(cleaned_input)
         elif detected_type == "planet":
             print("Selected mode: planet")
-            planet.process(image_path)
+            planet.process(cleaned_input)
         elif detected_type == "galaxy":
             print("Selected mode: galaxy")
-            galaxy.process(image_path)
+            galaxy.process(cleaned_input)
         elif detected_type == "nebula":
             print("Selected mode: nebula")
-            nebula.process(image_path)
+            nebula.process(cleaned_input)
         else:
             print("Could not determine the image type automatically.")
 

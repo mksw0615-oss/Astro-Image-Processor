@@ -10,120 +10,55 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 def process():
     print("Calibration mode selected.")
     print()
-    print("Calibration cleans your real space images before stacking.")
-    print("You need light frames. Dark, flat, and bias folders are optional.")
+    print("Calibration cleans your image before stacking.")
+    print("Enter the path to one image file to calibrate it.")
     print()
 
-    light_folder = ask_for_folder("Enter the light frames folder path")
+    light_path = ask_for_image_file("Enter the image file path")
 
-    if light_folder is None:
-        return
-
-    dark_folder = ask_for_optional_folder("Enter the dark frames folder path, or press Enter to skip")
-    flat_folder = ask_for_optional_folder("Enter the flat frames folder path, or press Enter to skip")
-    bias_folder = ask_for_optional_folder("Enter the bias frames folder path, or press Enter to skip")
-
-    light_paths = find_image_files(light_folder)
-
-    if len(light_paths) == 0:
-        print("No light frame images found.")
+    if light_path is None:
         return
 
     print()
-    print(f"Found {len(light_paths)} light frame(s).")
-    print("Building calibration frames...")
+    print("Calibrating image...")
 
-    master_dark = build_master_frame(dark_folder, "dark") if dark_folder else None
-    master_flat = build_master_frame(flat_folder, "flat") if flat_folder else None
-    master_bias = build_master_frame(bias_folder, "bias") if bias_folder else None
+    light = open_image_as_array(light_path)
 
-    output_folder = light_folder / "outputs" / "calibrated"
+    if light is None:
+        print("Could not read that image file.")
+        return
+
+    calibrated = calibrate_light(light, None, None, None)
+    output_folder = light_path.parent / "outputs" / "calibrated"
     output_folder.mkdir(parents=True, exist_ok=True)
-
-    print("Calibrating light frames...")
-
-    saved_count = 0
-
-    for light_path in light_paths:
-        light = open_image_as_array(light_path)
-
-        if light is None:
-            print(f"Skipping unreadable image: {light_path.name}")
-            continue
-
-        calibrated = calibrate_light(light, master_dark, master_flat, master_bias)
-        output_path = output_folder / f"{light_path.stem}_calibrated.png"
-        save_array_as_image(calibrated, output_path)
-        saved_count += 1
+    output_path = output_folder / f"{light_path.stem}_calibrated.png"
+    save_array_as_image(calibrated, output_path)
 
     print()
-    print(f"Saved {saved_count} calibrated image(s) to: {output_folder}")
+    print(f"Saved calibrated image to: {output_path}")
 
 
-def ask_for_folder(prompt):
-    folder_path = clean_path(input(f"{prompt}: "))
-    folder = Path(folder_path)
+def ask_for_image_file(prompt):
+    file_path = clean_path(input(f"{prompt}: "))
+    path = Path(file_path)
 
-    if not folder.exists():
-        print("Could not find that folder. Check the path and try again.")
+    if not path.exists():
+        print("Could not find that file. Check the path and try again.")
         return None
 
-    if not folder.is_dir():
-        print("That path is not a folder.")
+    if not path.is_file():
+        print("That path is not a file.")
         return None
 
-    return folder
-
-
-def ask_for_optional_folder(prompt):
-    folder_path = clean_path(input(f"{prompt}: "))
-
-    if folder_path == "":
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        print("That file does not look like a supported image file.")
         return None
 
-    folder = Path(folder_path)
-
-    if not folder.exists() or not folder.is_dir():
-        print("Could not use that folder. Skipping it.")
-        return None
-
-    return folder
+    return path
 
 
 def clean_path(path):
     return path.strip().strip('"').strip("'")
-
-
-def find_image_files(folder):
-    return sorted(
-        path for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
-
-
-def build_master_frame(folder, frame_type):
-    image_paths = find_image_files(folder)
-
-    if len(image_paths) == 0:
-        print(f"No {frame_type} frames found. Skipping {frame_type} calibration.")
-        return None
-
-    arrays = []
-
-    for path in image_paths:
-        image_array = open_image_as_array(path)
-
-        if image_array is not None:
-            arrays.append(image_array)
-
-    if len(arrays) == 0:
-        return None
-
-    target_shape = arrays[0].shape
-    matching_arrays = [array for array in arrays if array.shape == target_shape]
-
-    print(f"Created master {frame_type} from {len(matching_arrays)} frame(s).")
-    return np.median(matching_arrays, axis=0)
 
 
 def open_image_as_array(path):

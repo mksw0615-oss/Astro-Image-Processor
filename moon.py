@@ -28,11 +28,11 @@ def process(image_path):
     print()
     suggestions = suggest_moon_settings(image)
 
-    print("Suggested starting values based on this image:")
-    print(f"Brightness: {suggestions['brightness']}  -> makes the whole image lighter or darker")
-    print(f"Contrast:   {suggestions['contrast']}  -> increases or reduces the difference between bright and dark areas")
-    print(f"Sharpness:  {suggestions['sharpness']}  -> makes edges crisper or softer")
-    print(f"Detail:     {suggestions['detail']}  -> adds or reduces extra fine texture")
+    print("What each value does:")
+    print("Brightness -> makes the whole image lighter or darker")
+    print("Contrast -> increases or reduces the difference between bright and dark areas")
+    print("Sharpness -> makes edges crisper or softer")
+    print("Detail -> adds or reduces extra fine texture")
     print()
 
     brightness = ask_for_number("Brightness", suggestions["brightness"])
