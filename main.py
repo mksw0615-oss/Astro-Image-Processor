@@ -7,6 +7,7 @@ import galaxy
 import moon
 import nebula
 import planet
+import quality
 import stack
 
 
@@ -187,6 +188,10 @@ def main():
 
         if detected_type is None:
             continue
+
+        analysis = quality.analyze_image_quality(cleaned_input, detected_type=detected_type)
+        print(quality.format_detection_line(analysis))
+        print()
 
         if detected_type == "moon":
             print("Selected mode: moon")

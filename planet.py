@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageStat
 
+import quality
+
 
 DEFAULT_SETTINGS = {
     "local_contrast": 0.75,
@@ -26,7 +28,11 @@ def process(image_path):
         print("Could not open that file as an image.")
         return
 
+    analysis = quality.analyze_image_quality(path, detected_type="planet")
     print()
+    quality.print_quality_report(analysis)
+    print()
+
     suggestions = suggest_planet_settings(image)
 
     print("What each value does:")

@@ -2,6 +2,8 @@ from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
+import quality
+
 
 DEFAULT_SETTINGS = {
     "brightness": 1.30,
@@ -27,7 +29,11 @@ def process(image_path):
         print("Could not open that file as an image.")
         return
 
+    analysis = quality.analyze_image_quality(path, detected_type="nebula")
     print()
+    quality.print_quality_report(analysis)
+    print()
+
     suggestions = suggest_nebula_settings(image)
 
     print("What each value does:")
