@@ -32,6 +32,7 @@ def detect_image_type(image_path):
     diffuse_region_score = get_diffuse_region_score(image)
     bright_object_score = get_bright_object_score(gray, threshold=180)
     point_like_score = get_point_like_score(gray)
+    halo_score = get_extended_halo_score(gray)
 
     if (
         brightest_pixel >= 210
@@ -61,6 +62,13 @@ def detect_image_type(image_path):
 
     if diffuse_region_score > 0.6 and saturation > 45 and average_brightness < 220:
         return "nebula"
+
+    # A galaxy nucleus can be as bright as a planet or a star.  Unlike an
+    # isolated object, though, it stays brighter than the surrounding sky over
+    # several rings of pixels.  Check this before the planet rule so a bright
+    # core with a faint halo is not treated as a single point of light.
+    if halo_score >= 0.18 and average_brightness < 220:
+        return "galaxy"
 
     if (
         brightest_pixel >= 170
@@ -156,6 +164,83 @@ def get_point_like_score(gray):
     aspect_ratio = min(bbox_width, bbox_height) / max(bbox_width, bbox_height) if max(bbox_width, bbox_height) else 0.0
 
     return min(1.0, compactness * 0.7 + aspect_ratio * 0.3)
+
+
+def get_extended_halo_score(gray):
+    """Return how strongly the brightest sources are surrounded by a halo.
+
+    A star or unresolved planet drops to the sky level a few pixels from its
+    centre.  A galaxy core has a gentler brightness falloff, leaving measurable
+    light in both an inner and an outer ring.  The image is reduced first so
+    this test remains quick on large camera files.
+    """
+    max_dimension = 500
+    width, height = gray.size
+    if max(width, height) > max_dimension:
+        scale = max_dimension / max(width, height)
+        gray = gray.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+
+    width, height = gray.size
+    if width < 25 or height < 25:
+        return 0.0
+
+    pixels = list(gray.getdata())
+    sky_level = sorted(pixels)[len(pixels) // 2]
+    peak_threshold = max(sky_level + 25, 100)
+
+    # Test a handful of separated bright candidates.  This prevents one bright
+    # foreground star from hiding a fainter galaxy nucleus elsewhere in frame.
+    bright_pixels = []
+    for y in range(12, height - 12, 2):
+        for x in range(12, width - 12, 2):
+            value = gray.getpixel((x, y))
+            if value >= peak_threshold:
+                bright_pixels.append((value, x, y))
+
+    # Keep the brightest candidates first, then require them to be separated
+    # from one another.  Limiting this list also keeps the scan fast on a
+    # star-rich image.
+    candidates = []
+    for value, x, y in sorted(bright_pixels, reverse=True)[:500]:
+        if all((x - old_x) ** 2 + (y - old_y) ** 2 >= 20 ** 2 for _, old_x, old_y in candidates):
+            candidates.append((value, x, y))
+        if len(candidates) == 12:
+            break
+
+    best_score = 0.0
+    for peak, center_x, center_y in candidates:
+        core_total = core_count = inner_total = inner_count = halo_total = halo_count = 0
+        for y in range(center_y - 12, center_y + 13):
+            for x in range(center_x - 12, center_x + 13):
+                distance_squared = (x - center_x) ** 2 + (y - center_y) ** 2
+                value = gray.getpixel((x, y)) - sky_level
+                if distance_squared <= 3 ** 2:
+                    core_total += value
+                    core_count += 1
+                elif 4 ** 2 <= distance_squared <= 7 ** 2:
+                    inner_total += value
+                    inner_count += 1
+                elif 8 ** 2 <= distance_squared <= 12 ** 2:
+                    halo_total += value
+                    halo_count += 1
+
+        if not (core_count and inner_count and halo_count):
+            continue
+
+        core = max(0.0, core_total / core_count)
+        inner = max(0.0, inner_total / inner_count)
+        halo = max(0.0, halo_total / halo_count)
+        contrast = max(1.0, peak - sky_level)
+
+        # Both rings must retain light.  The outer ring is weighted more
+        # heavily because it is the useful separator from an isolated point.
+        score = min(1.0, (inner / contrast) * 0.35 + (halo / contrast) * 0.65)
+        best_score = max(best_score, score)
+
+    return best_score
 
 
 def main():

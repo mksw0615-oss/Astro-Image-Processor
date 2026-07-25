@@ -1,13 +1,15 @@
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+import cv2
+import numpy as np
+from PIL import Image, ImageEnhance, ImageFilter, ImageStat
 
 import quality
 
 
 DEFAULT_SETTINGS = {
-    "brightness": 1.25,
-    "contrast": 1.45,
+    "shadow_lift": 1.25,
+    "local_contrast": 2.0,
     "color": 1.35,
     "sharpness": 1.25,
     "background": 0.90,
@@ -36,20 +38,20 @@ def process(image_path):
     suggestions = suggest_galaxy_settings(image)
 
     print("What each value does:")
-    print("Brightness -> makes the whole image lighter or darker")
-    print("Contrast -> increases or reduces the difference between bright and dark areas")
+    print("Shadow / midtone lift -> reveals faint arms without brightening the core")
+    print("Local contrast -> brings out dust lanes and faint detail")
     print("Color -> boosts or reduces color saturation")
     print("Sharpness -> makes edges crisper or softer")
     print("Background darkening -> darkens the darker parts more or less")
     print()
 
-    brightness = ask_for_number("Brightness", suggestions["brightness"])
-    contrast = ask_for_number("Contrast", suggestions["contrast"])
+    shadow_lift = ask_for_number("Shadow / midtone lift", suggestions["shadow_lift"])
+    local_contrast = ask_for_number("Local contrast", suggestions["local_contrast"])
     color = ask_for_number("Color balance / saturation", suggestions["color"])
     sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
     background = ask_for_number("Background darkening", suggestions["background"])
 
-    processed = enhance_galaxy(image, brightness, contrast, color, sharpness, background)
+    processed = enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background)
 
     output_path = make_output_path(path)
     processed.save(output_path)
@@ -86,29 +88,29 @@ def suggest_galaxy_settings(image):
     edge_strength = get_edge_strength(gray)
     color_strength = get_color_strength(rgb)
 
-    brightness = DEFAULT_SETTINGS["brightness"]
-    contrast = DEFAULT_SETTINGS["contrast"]
+    shadow_lift = DEFAULT_SETTINGS["shadow_lift"]
+    local_contrast = DEFAULT_SETTINGS["local_contrast"]
     color = DEFAULT_SETTINGS["color"]
     sharpness = DEFAULT_SETTINGS["sharpness"]
     background = DEFAULT_SETTINGS["background"]
 
     if average_brightness < 70:
-        brightness = 1.4
+        shadow_lift = 1.4
         background = 0.85
     elif average_brightness < 100:
-        brightness = 1.3
+        shadow_lift = 1.3
     elif average_brightness > 200:
-        brightness = 1.05
+        shadow_lift = 1.05
         background = 0.95
     elif average_brightness > 170:
-        brightness = 1.15
+        shadow_lift = 1.15
 
     if contrast_spread < 30:
-        contrast = 1.65
+        local_contrast = 2.6
     elif contrast_spread < 50:
-        contrast = 1.55
+        local_contrast = 2.3
     elif contrast_spread > 80:
-        contrast = 1.25
+        local_contrast = 1.5
 
     if color_strength < 25:
         color = 1.6
@@ -125,8 +127,8 @@ def suggest_galaxy_settings(image):
         sharpness = 1.05
 
     return {
-        "brightness": round(brightness, 2),
-        "contrast": round(contrast, 2),
+        "shadow_lift": round(shadow_lift, 2),
+        "local_contrast": round(local_contrast, 2),
         "color": round(color, 2),
         "sharpness": round(sharpness, 2),
         "background": round(background, 2),
@@ -149,17 +151,39 @@ def get_color_strength(rgb):
     return (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
 
 
-def enhance_galaxy(image, brightness, contrast, color, sharpness, background):
-    image = image.convert("RGB")
+def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background):
+    """Enhance faint galaxy detail while preserving the bright nucleus."""
+    original = np.array(image.convert("RGB"), dtype=np.uint8)
+    lab = cv2.cvtColor(original, cv2.COLOR_RGB2LAB)
+    luminance = lab[:, :, 0]
 
-    image = ImageEnhance.Brightness(image).enhance(brightness)
-    image = ImageOps.autocontrast(image, cutoff=1)
-    image = ImageEnhance.Contrast(image).enhance(contrast)
-    image = ImageEnhance.Color(image).enhance(color)
-    image = darken_background(image, background)
-    image = ImageEnhance.Sharpness(image).enhance(sharpness)
+    # A gamma curve lifts the shadows more gently than a linear brightness
+    # multiplier.  Blend it only into the 20--180 range, then fade it out.
+    shadow_lift = min(max(shadow_lift, 1.0), 2.0)
+    gamma_luminance = np.power(luminance / 255.0, 1.0 / shadow_lift) * 255.0
+    midtone_mask = np.clip((180.0 - luminance) / 160.0, 0.0, 1.0)
+    midtone_mask *= (luminance >= 20) & (luminance <= 180)
+    toned_luminance = luminance * (1.0 - midtone_mask) + gamma_luminance * midtone_mask
 
-    return image.filter(ImageFilter.SMOOTH_MORE)
+    # CLAHE gives local contrast to dust lanes and spiral arms.  Its result is
+    # also restricted to shadows and midtones, so it cannot overexpose a core.
+    local_contrast = min(max(local_contrast, 0.5), 4.0)
+    clahe = cv2.createCLAHE(clipLimit=local_contrast, tileGridSize=(8, 8))
+    clahe_luminance = clahe.apply(luminance)
+    enhanced_luminance = toned_luminance * (1.0 - midtone_mask) + clahe_luminance * midtone_mask
+    lab[:, :, 0] = np.clip(enhanced_luminance, 0, 255).astype(np.uint8)
+
+    enhanced = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
+    enhanced = ImageEnhance.Color(enhanced).enhance(color)
+    enhanced = darken_background(enhanced, background)
+    enhanced = ImageEnhance.Sharpness(enhanced).enhance(sharpness)
+
+    # Pixels at and above 240 are the galaxy nucleus/highlights.  Preserve
+    # them completely, with a soft transition from 220 to avoid a hard edge.
+    highlight_mask = np.clip((luminance.astype(np.float32) - 220.0) / 20.0, 0.0, 1.0)
+    processed = np.array(enhanced, dtype=np.float32)
+    result = processed * (1.0 - highlight_mask[:, :, None]) + original * highlight_mask[:, :, None]
+    return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
 
 
 def darken_background(image, background):
