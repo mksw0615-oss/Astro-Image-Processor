@@ -4,6 +4,7 @@ from PIL import Image
 import main
 import calibrate
 import galaxy
+import nebula
 import planet
 
 
@@ -48,7 +49,26 @@ def test_extended_halo_score_separates_diffuse_core_from_isolated_point():
     assert main.get_extended_halo_score(planet_like) < 0.18
 
 
-def test_galaxy_enhancement_lifts_midtone_without_changing_highlight_core():
+def test_galaxy_structure_score_prefers_elliptical_smooth_halo():
+    galaxy_like = Image.new("L", (120, 120), 20)
+    nebula_like = Image.new("L", (120, 120), 20)
+
+    for x in range(120):
+        for y in range(120):
+            ellipse_distance = ((x - 60) / 24) ** 2 + ((y - 60) / 10) ** 2
+            if ellipse_distance <= 1:
+                galaxy_like.putpixel((x, y), int(60 + 170 * (1 - ellipse_distance)))
+
+            left_lobe = (x - 43) ** 2 + (y - 65) ** 2
+            right_lobe = (x - 77) ** 2 + (y - 48) ** 2
+            if left_lobe <= 13 ** 2 or right_lobe <= 10 ** 2:
+                nebula_like.putpixel((x, y), 150)
+
+    assert main.get_galaxy_structure_score(galaxy_like) >= 0.42
+    assert main.get_galaxy_structure_score(nebula_like) < 0.42
+
+
+def test_galaxy_enhancement_creates_dark_sky_without_clipping_core():
     image = Image.new("RGB", (40, 40), (80, 80, 80))
     for x in range(16, 24):
         for y in range(16, 24):
@@ -56,8 +76,30 @@ def test_galaxy_enhancement_lifts_midtone_without_changing_highlight_core():
 
     processed = galaxy.enhance_galaxy(image, 1.3, 2.0, 1.0, 1.0, 1.0)
 
-    assert processed.getpixel((20, 20)) == (250, 250, 250)
-    assert processed.getpixel((4, 4))[0] > 80
+    assert processed.getpixel((20, 20))[0] > 180
+    assert processed.getpixel((4, 4))[0] < 60
+
+
+def test_galaxy_noise_reduction_keeps_bright_core_intact():
+    image = Image.new("RGB", (40, 40), (80, 80, 80))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (250, 250, 250))
+
+    processed = galaxy.enhance_galaxy(image, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0)
+    assert processed.getpixel((20, 20))[0] > 180
+
+
+def test_nebula_enhancement_preserves_bright_core_and_lifts_faint_sky():
+    image = Image.new("RGB", (40, 40), (60, 75, 85))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (255, 250, 245))
+
+    processed = nebula.enhance_nebula(image, 1.12, 1.1, 1.1, 1.0, 1.0, 0.0)
+
+    assert processed.getpixel((20, 20))[0] > 220
+    assert processed.getpixel((4, 4))[0] < 60
 
 
 def test_background_neutralization_removes_pink_sky_cast():

@@ -9,10 +9,11 @@ import quality
 
 DEFAULT_SETTINGS = {
     "shadow_lift": 1.25,
-    "local_contrast": 2.0,
-    "color": 1.35,
-    "sharpness": 1.25,
+    "local_contrast": 1.5,
+    "color": 1.22,
+    "sharpness": 1.10,
     "background": 0.90,
+    "noise_reduction": 0.85,
 }
 
 
@@ -42,16 +43,20 @@ def process(image_path):
     print("Local contrast -> brings out dust lanes and faint detail")
     print("Color -> boosts or reduces color saturation")
     print("Sharpness -> makes edges crisper or softer")
-    print("Background darkening -> darkens the darker parts more or less")
+    print("Background level -> sets the dark sky floor after background subtraction")
+    print("Noise reduction -> smooths faint grain while protecting stars and the core")
     print()
 
     shadow_lift = ask_for_number("Shadow / midtone lift", suggestions["shadow_lift"])
     local_contrast = ask_for_number("Local contrast", suggestions["local_contrast"])
     color = ask_for_number("Color balance / saturation", suggestions["color"])
     sharpness = ask_for_number("Sharpness", suggestions["sharpness"])
-    background = ask_for_number("Background darkening", suggestions["background"])
+    background = ask_for_number("Background level", suggestions["background"])
+    noise_reduction = ask_for_number("Noise reduction", suggestions["noise_reduction"])
 
-    processed = enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background)
+    processed = enhance_galaxy(
+        image, shadow_lift, local_contrast, color, sharpness, background, noise_reduction
+    )
 
     output_path = make_output_path(path)
     processed.save(output_path)
@@ -93,6 +98,7 @@ def suggest_galaxy_settings(image):
     color = DEFAULT_SETTINGS["color"]
     sharpness = DEFAULT_SETTINGS["sharpness"]
     background = DEFAULT_SETTINGS["background"]
+    noise_reduction = DEFAULT_SETTINGS["noise_reduction"]
 
     if average_brightness < 70:
         shadow_lift = 1.4
@@ -106,25 +112,26 @@ def suggest_galaxy_settings(image):
         shadow_lift = 1.15
 
     if contrast_spread < 30:
-        local_contrast = 2.6
+        local_contrast = 1.8
     elif contrast_spread < 50:
-        local_contrast = 2.3
+        local_contrast = 1.6
     elif contrast_spread > 80:
         local_contrast = 1.5
 
     if color_strength < 25:
-        color = 1.6
+        color = 1.25
     elif color_strength < 40:
-        color = 1.45
+        color = 1.22
     elif color_strength > 70:
         color = 1.15
 
     if edge_strength < 8:
-        sharpness = 1.45
+        sharpness = 1.15
     elif edge_strength < 13:
-        sharpness = 1.35
+        sharpness = 1.12
     elif edge_strength > 20:
         sharpness = 1.05
+        noise_reduction = 0.90
 
     return {
         "shadow_lift": round(shadow_lift, 2),
@@ -132,6 +139,7 @@ def suggest_galaxy_settings(image):
         "color": round(color, 2),
         "sharpness": round(sharpness, 2),
         "background": round(background, 2),
+        "noise_reduction": round(noise_reduction, 2),
     }
 
 
@@ -151,39 +159,67 @@ def get_color_strength(rgb):
     return (r_stat.stddev[0] + g_stat.stddev[0] + b_stat.stddev[0]) / 3
 
 
-def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background):
-    """Enhance faint galaxy detail while preserving the bright nucleus."""
-    original = np.array(image.convert("RGB"), dtype=np.uint8)
-    lab = cv2.cvtColor(original, cv2.COLOR_RGB2LAB)
-    luminance = lab[:, :, 0]
+def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background, noise_reduction=0.55):
+    """Reveal a faint galaxy through background extraction and an asinh stretch."""
+    original = np.asarray(image.convert("RGB"), dtype=np.float32)
+    sky_floor = min(max(background, 0.0), 1.0) * 3.0
+    signal = subtract_sky_background(original, sky_floor)
+    luminance = (
+        signal[:, :, 0] * 0.2126
+        + signal[:, :, 1] * 0.7152
+        + signal[:, :, 2] * 0.0722
+    )
 
-    # A gamma curve lifts the shadows more gently than a linear brightness
-    # multiplier.  Blend it only into the 20--180 range, then fade it out.
-    shadow_lift = min(max(shadow_lift, 1.0), 2.0)
-    gamma_luminance = np.power(luminance / 255.0, 1.0 / shadow_lift) * 255.0
-    midtone_mask = np.clip((180.0 - luminance) / 160.0, 0.0, 1.0)
-    midtone_mask *= (luminance >= 20) & (luminance <= 180)
-    toned_luminance = luminance * (1.0 - midtone_mask) + gamma_luminance * midtone_mask
+    # The raw frame is dominated by a pink sky.  After subtracting that sky,
+    # an asinh stretch lifts the faint outer arms while compressing the bright
+    # nucleus and stars instead of clipping them.
+    white_point = max(12.0, float(np.percentile(luminance, 99.95)))
+    shadow_lift = min(max(shadow_lift, 0.8), 1.5)
+    stretch_strength = 3.5 + (shadow_lift - 1.0) * 6.0
+    stretched = np.arcsinh(signal / white_point * stretch_strength)
+    stretched *= 255.0 / np.arcsinh(stretch_strength)
+    stretched_rgb = np.clip(stretched, 0, 255).astype(np.uint8)
 
-    # CLAHE gives local contrast to dust lanes and spiral arms.  Its result is
-    # also restricted to shadows and midtones, so it cannot overexpose a core.
-    local_contrast = min(max(local_contrast, 0.5), 4.0)
+    # The stretch makes faint read noise visible as dusty/grainy texture.
+    # Denoise before CLAHE, then blend only into darker pixels: stars, the core,
+    # and strong dust-lane edges remain from the unblurred image.
+    noise_reduction = min(max(noise_reduction, 0.0), 1.0)
+    denoised_rgb = cv2.fastNlMeansDenoisingColored(
+        stretched_rgb, None, h=10, hColor=12, templateWindowSize=7, searchWindowSize=21
+    )
+    stretched_luminance = cv2.cvtColor(stretched_rgb, cv2.COLOR_RGB2GRAY)
+    denoise_mask = np.clip((200.0 - stretched_luminance) / 145.0, 0.0, 1.0)
+    denoise_mask *= noise_reduction
+    stretched_rgb = np.clip(
+        stretched_rgb * (1.0 - denoise_mask[:, :, None])
+        + denoised_rgb * denoise_mask[:, :, None],
+        0,
+        255,
+    ).astype(np.uint8)
+
+    # Use CLAHE only as a restrained luminance-only adjustment.  This enhances
+    # dust lanes while retaining the colour relationships in the RGB data.
+    lab = cv2.cvtColor(stretched_rgb, cv2.COLOR_RGB2LAB)
+    local_contrast = min(max(local_contrast, 0.5), 2.0)
     clahe = cv2.createCLAHE(clipLimit=local_contrast, tileGridSize=(8, 8))
-    clahe_luminance = clahe.apply(luminance)
-    enhanced_luminance = toned_luminance * (1.0 - midtone_mask) + clahe_luminance * midtone_mask
-    lab[:, :, 0] = np.clip(enhanced_luminance, 0, 255).astype(np.uint8)
+    clahe_luminance = clahe.apply(lab[:, :, 0])
+    detail_mask = np.clip((220.0 - lab[:, :, 0]) / 180.0, 0.0, 1.0) * 0.35
+    lab[:, :, 0] = np.clip(
+        lab[:, :, 0] * (1.0 - detail_mask) + clahe_luminance * detail_mask,
+        0,
+        255,
+    ).astype(np.uint8)
 
     enhanced = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
-    enhanced = ImageEnhance.Color(enhanced).enhance(color)
-    enhanced = darken_background(enhanced, background)
-    enhanced = ImageEnhance.Sharpness(enhanced).enhance(sharpness)
+    enhanced = ImageEnhance.Color(enhanced).enhance(min(max(color, 0.8), 1.3))
+    enhanced = ImageEnhance.Sharpness(enhanced).enhance(min(max(sharpness, 0.8), 1.2))
+    return enhanced
 
-    # Pixels at and above 240 are the galaxy nucleus/highlights.  Preserve
-    # them completely, with a soft transition from 220 to avoid a hard edge.
-    highlight_mask = np.clip((luminance.astype(np.float32) - 220.0) / 20.0, 0.0, 1.0)
-    processed = np.array(enhanced, dtype=np.float32)
-    result = processed * (1.0 - highlight_mask[:, :, None]) + original * highlight_mask[:, :, None]
-    return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
+
+def subtract_sky_background(image_array, target_sky_level=3.0):
+    """Remove the dominant RGB sky cast using a robust low-percentile sample."""
+    sky_rgb = np.percentile(image_array.reshape(-1, 3), 20, axis=0)
+    return np.clip(image_array - sky_rgb + target_sky_level, 0, 255)
 
 
 def darken_background(image, background):

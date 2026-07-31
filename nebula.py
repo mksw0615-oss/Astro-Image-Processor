@@ -1,17 +1,18 @@
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+import numpy as np
+from PIL import Image, ImageEnhance, ImageFilter, ImageStat
 
 import quality
 
 
 DEFAULT_SETTINGS = {
-    "brightness": 1.30,
-    "contrast": 1.40,
-    "color": 1.60,
-    "sharpness": 1.20,
-    "background": 0.88,
-    "glow": 0.25,
+    "brightness": 1.12,
+    "contrast": 1.10,
+    "color": 1.18,
+    "sharpness": 1.10,
+    "background": 0.96,
+    "glow": 0.12,
 }
 
 
@@ -37,8 +38,8 @@ def process(image_path):
     suggestions = suggest_nebula_settings(image)
 
     print("What each value does:")
-    print("Brightness -> makes the whole image lighter or darker")
-    print("Contrast -> increases or reduces the difference between bright and dark areas")
+    print("Brightness -> controls the nonlinear nebula stretch")
+    print("Contrast -> adjusts faint nebula detail after the stretch")
     print("Color -> boosts or reduces color saturation")
     print("Sharpness -> makes edges crisper or softer")
     print("Background darkening -> darkens the darker parts more or less")
@@ -97,39 +98,39 @@ def suggest_nebula_settings(image):
     glow = DEFAULT_SETTINGS["glow"]
 
     if average_brightness < 70:
-        brightness = 1.5
-        background = 0.82
+        brightness = 1.18
+        background = 0.93
     elif average_brightness < 100:
-        brightness = 1.4
+        brightness = 1.15
     elif average_brightness > 190:
-        brightness = 1.1
-        background = 0.95
+        brightness = 1.08
+        background = 0.98
     elif average_brightness > 160:
-        brightness = 1.2
+        brightness = 1.10
 
     if contrast_spread < 30:
-        contrast = 1.6
+        contrast = 1.25
     elif contrast_spread < 50:
-        contrast = 1.5
+        contrast = 1.20
     elif contrast_spread > 80:
-        contrast = 1.2
+        contrast = 1.08
 
     if color_strength < 20:
-        color = 1.85
+        color = 1.28
     elif color_strength < 35:
-        color = 1.7
+        color = 1.22
     elif color_strength > 60:
-        color = 1.3
+        color = 1.08
 
     if edge_strength < 8:
-        sharpness = 1.4
-        glow = 0.35
+        sharpness = 1.20
+        glow = 0.18
     elif edge_strength < 13:
-        sharpness = 1.25
-        glow = 0.3
+        sharpness = 1.15
+        glow = 0.14
     elif edge_strength > 20:
         sharpness = 1.0
-        glow = 0.15
+        glow = 0.08
 
     return {
         "brightness": round(brightness, 2),
@@ -158,17 +159,48 @@ def get_color_strength(rgb):
 
 
 def enhance_nebula(image, brightness, contrast, color, sharpness, background, glow):
-    image = image.convert("RGB")
+    """Extract faint nebula signal with sky subtraction and an asinh stretch."""
+    original = np.asarray(image.convert("RGB"), dtype=np.float32)
+    signal = subtract_sky_gradient(original)
+    luminance = (
+        signal[:, :, 0] * 0.2126
+        + signal[:, :, 1] * 0.7152
+        + signal[:, :, 2] * 0.0722
+    )
 
-    image = ImageEnhance.Brightness(image).enhance(brightness)
-    image = ImageOps.autocontrast(image, cutoff=1)
-    image = ImageEnhance.Contrast(image).enhance(contrast)
-    image = ImageEnhance.Color(image).enhance(color)
-    image = darken_background(image, background)
-    image = add_soft_glow(image, glow)
-    image = ImageEnhance.Sharpness(image).enhance(sharpness)
+    # Asinh is the standard astronomy-style stretch: faint material grows
+    # rapidly while stars and the nebula core are compressed instead of clipped.
+    white_point = max(12.0, float(np.percentile(luminance, 99.95)))
+    brightness = min(max(brightness, 0.8), 1.35)
+    stretch_strength = 3.5 + (brightness - 1.0) * 6.0
+    processed = np.arcsinh(signal / white_point * stretch_strength)
+    processed *= 255.0 / np.arcsinh(stretch_strength)
 
-    return image.filter(ImageFilter.SMOOTH)
+    # Modest contrast after stretching makes dust lanes clearer without the
+    # per-channel autocontrast that previously turned the background green.
+    contrast = min(max(contrast, 0.8), 1.25)
+    processed = (processed - 16.0) * contrast + 16.0
+    processed_image = Image.fromarray(np.clip(processed, 0, 255).astype(np.uint8))
+
+    processed_image = ImageEnhance.Color(processed_image).enhance(min(max(color, 0.8), 1.25))
+    # Background subtraction already establishes the black point.  A second
+    # threshold-based darkening pass creates visible patches, so do not apply it.
+    processed_image = add_soft_glow(processed_image, glow)
+    processed_image = ImageEnhance.Sharpness(processed_image).enhance(min(max(sharpness, 0.8), 1.25))
+
+    return processed_image
+
+
+def subtract_sky_gradient(image_array, target_sky_level=3.0):
+    """Subtract a robust RGB sky estimate without altering image gradients.
+
+    A per-channel plane can overfit uneven sensor/sky colour and create false
+    green or magenta bands after stretching.  The lower percentile is stable
+    in star fields and removes the dominant sky cast while retaining smooth,
+    natural gradients in the original data.
+    """
+    background = np.percentile(image_array.reshape(-1, 3), 20, axis=0)
+    return np.clip(image_array - background + target_sky_level, 0, 255)
 
 
 def darken_background(image, background):

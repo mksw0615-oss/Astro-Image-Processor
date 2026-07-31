@@ -33,6 +33,7 @@ def detect_image_type(image_path):
     bright_object_score = get_bright_object_score(gray, threshold=180)
     point_like_score = get_point_like_score(gray)
     halo_score = get_extended_halo_score(gray)
+    galaxy_structure_score = get_galaxy_structure_score(gray)
 
     if (
         brightest_pixel >= 210
@@ -60,15 +61,29 @@ def detect_image_type(image_path):
     ):
         return "moon"
 
-    if diffuse_region_score > 0.6 and saturation > 45 and average_brightness < 220:
+    # A galaxy needs more than a bright centre: its extended light should be
+    # smooth and elliptical.  This keeps an irregular, diffuse nebula (such as
+    # Orion) out of Galaxy Mode even when its core is bright.
+    if galaxy_structure_score >= 0.42 and average_brightness < 220:
+        return "galaxy"
+
+    if diffuse_region_score > 0.35 and average_brightness < 220:
         return "nebula"
 
-    # A galaxy nucleus can be as bright as a planet or a star.  Unlike an
-    # isolated object, though, it stays brighter than the surrounding sky over
-    # several rings of pixels.  Check this before the planet rule so a bright
-    # core with a faint halo is not treated as a single point of light.
-    if halo_score >= 0.18 and average_brightness < 220:
+    # A compact galaxy can be nearly round, so retain a conservative radial
+    # fallback only when at least some elliptical/smooth structure is present.
+    if (
+        halo_score >= 0.24
+        and galaxy_structure_score >= 0.28
+        and average_brightness < 220
+    ):
         return "galaxy"
+
+    if (
+        (diffuse_region_score > 0.1 or halo_score >= 0.08)
+        and average_brightness < 220
+    ):
+        return "nebula"
 
     if (
         brightest_pixel >= 170
@@ -239,6 +254,141 @@ def get_extended_halo_score(gray):
         # heavily because it is the useful separator from an isolated point.
         score = min(1.0, (inner / contrast) * 0.35 + (halo / contrast) * 0.65)
         best_score = max(best_score, score)
+
+    return best_score
+
+
+def get_galaxy_structure_score(gray):
+    """Score smooth, elliptical diffuse light surrounding a bright core.
+
+    Nebulae can also have bright centres and halos.  Their surrounding light is
+    usually irregular, whereas a galaxy has a coherent elliptical distribution
+    with a gradual decline from its nucleus.  The calculation is deliberately
+    performed on a blurred, reduced copy so individual stars do not dominate.
+    """
+    max_dimension = 500
+    width, height = gray.size
+    if max(width, height) > max_dimension:
+        scale = max_dimension / max(width, height)
+        gray = gray.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+
+    width, height = gray.size
+    radius = 36
+    if width < radius * 2 + 1 or height < radius * 2 + 1:
+        return 0.0
+
+    blurred = gray.filter(ImageFilter.GaussianBlur(radius=3))
+    values = list(blurred.getdata())
+    sky_level = sorted(values)[len(values) * 30 // 100]
+    candidates = []
+
+    for y in range(radius, height - radius, 3):
+        for x in range(radius, width - radius, 3):
+            value = blurred.getpixel((x, y))
+            if value >= sky_level + 12:
+                candidates.append((value, x, y))
+
+    selected = []
+    for value, x, y in sorted(candidates, reverse=True)[:400]:
+        if all((x - old_x) ** 2 + (y - old_y) ** 2 >= 30 ** 2 for _, old_x, old_y in selected):
+            selected.append((value, x, y))
+        if len(selected) == 10:
+            break
+
+    best_score = 0.0
+    for peak, center_x, center_y in selected:
+        ring_values = []
+        points = []
+        core_total = core_count = inner_total = inner_count = outer_total = outer_count = 0
+
+        for y in range(center_y - radius, center_y + radius + 1):
+            for x in range(center_x - radius, center_x + radius + 1):
+                dx = x - center_x
+                dy = y - center_y
+                distance_squared = dx * dx + dy * dy
+                value = blurred.getpixel((x, y))
+                if 30 ** 2 <= distance_squared <= radius ** 2:
+                    ring_values.append(value)
+                elif distance_squared <= 28 ** 2:
+                    points.append((dx, dy, value))
+
+        if not ring_values:
+            continue
+        local_sky = sorted(ring_values)[len(ring_values) // 2]
+        if peak - local_sky < 12:
+            continue
+
+        total_weight = weighted_x = weighted_y = 0.0
+        for dx, dy, value in points:
+            weight = max(0.0, value - local_sky)
+            total_weight += weight
+            weighted_x += dx * weight
+            weighted_y += dy * weight
+
+            distance_squared = dx * dx + dy * dy
+            if distance_squared <= 5 ** 2:
+                core_total += weight
+                core_count += 1
+            elif 7 ** 2 <= distance_squared <= 15 ** 2:
+                inner_total += weight
+                inner_count += 1
+            elif 17 ** 2 <= distance_squared <= 28 ** 2:
+                outer_total += weight
+                outer_count += 1
+
+        if not (total_weight and core_count and inner_count and outer_count):
+            continue
+
+        mean_x = weighted_x / total_weight
+        mean_y = weighted_y / total_weight
+        cov_xx = cov_yy = cov_xy = 0.0
+        for dx, dy, value in points:
+            weight = max(0.0, value - local_sky)
+            cov_xx += weight * (dx - mean_x) ** 2
+            cov_yy += weight * (dy - mean_y) ** 2
+            cov_xy += weight * (dx - mean_x) * (dy - mean_y)
+
+        cov_xx /= total_weight
+        cov_yy /= total_weight
+        cov_xy /= total_weight
+        trace = cov_xx + cov_yy
+        determinant_term = max(0.0, (cov_xx - cov_yy) ** 2 + 4 * cov_xy ** 2)
+        major_variance = (trace + determinant_term ** 0.5) / 2
+        minor_variance = (trace - determinant_term ** 0.5) / 2
+        axis_ratio = (major_variance / max(minor_variance, 0.01)) ** 0.5
+        if axis_ratio < 1.32:
+            continue
+
+        # Galaxies are approximately symmetric around their nucleus; Orion's
+        # emission is made of uneven lobes and dark lanes.  Compare each pixel
+        # in the diffuse halo with its opposite point around the bright core.
+        symmetry_difference = symmetry_total = 0.0
+        for dy in range(-28, 29):
+            for dx in range(-28, 29):
+                distance_squared = dx * dx + dy * dy
+                if distance_squared > 28 ** 2 or (dy < 0 or (dy == 0 and dx <= 0)):
+                    continue
+                signal = max(0.0, blurred.getpixel((center_x + dx, center_y + dy)) - local_sky)
+                opposite_signal = max(0.0, blurred.getpixel((center_x - dx, center_y - dy)) - local_sky)
+                symmetry_difference += abs(signal - opposite_signal)
+                symmetry_total += signal + opposite_signal
+
+        symmetry_score = 1.0 - symmetry_difference / max(symmetry_total, 1.0)
+        if symmetry_score < 0.62:
+            continue
+
+        core = core_total / core_count
+        inner = inner_total / inner_count
+        outer = outer_total / outer_count
+        profile_score = min(1.0, inner / max(core * 0.35, 1.0), outer / max(core * 0.16, 1.0))
+        ellipse_score = min(1.0, max(0.0, (axis_ratio - 1.15) / 0.65))
+        best_score = max(
+            best_score,
+            ellipse_score * 0.45 + profile_score * 0.30 + symmetry_score * 0.25,
+        )
 
     return best_score
 
