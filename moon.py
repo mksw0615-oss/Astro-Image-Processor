@@ -12,6 +12,8 @@ DEFAULT_SETTINGS = {
     "detail": 1.3,
 }
 
+COLOR_BOOST = 1.25
+
 
 def process(image_path):
     image_path = clean_path(image_path)
@@ -159,17 +161,21 @@ def get_brightest_pixel(gray):
 
 
 def enhance_moon(image, brightness, contrast, sharpness, detail):
-    image = image.convert("L")
+    # Keep the camera's RGB channels.  Converting to L here made every Moon
+    # enhancement monochrome, even when the source contains warm earthshine,
+    # atmospheric colour, or chromatic detail around the limb.
+    image = image.convert("RGB")
 
     image = ImageEnhance.Brightness(image).enhance(brightness)
     image = ImageOps.autocontrast(image)
     image = ImageEnhance.Contrast(image).enhance(contrast)
+    image = ImageEnhance.Color(image).enhance(COLOR_BOOST)
     image = ImageEnhance.Sharpness(image).enhance(sharpness)
 
     detail_layer = image.filter(ImageFilter.DETAIL)
     image = Image.blend(image, detail_layer, min(max(detail - 1.0, 0), 1))
 
-    return image.convert("RGB")
+    return image
 
 
 def make_output_path(path):

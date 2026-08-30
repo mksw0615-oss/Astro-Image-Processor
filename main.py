@@ -34,31 +34,13 @@ def detect_image_type(image_path):
     point_like_score = get_point_like_score(gray)
     halo_score = get_extended_halo_score(gray)
     galaxy_structure_score = get_galaxy_structure_score(gray)
+    lunar_disc_score = get_lunar_disc_score(gray)
 
-    if (
-        brightest_pixel >= 210
-        and bright_object_score > 0.5
-        and contrast_spread > 18
-        and saturation < 90
-        and point_like_score < 0.95
-    ):
-        return "moon"
-
-    if (
-        brightest_pixel >= 220
-        and bright_object_score > 0.75
-        and point_like_score > 0.85
-        and contrast_spread > 15
-    ):
-        return "moon"
-
-    if (
-        brightest_pixel >= 190
-        and bright_object_score > 0.65
-        and contrast_spread > 15
-        and saturation < 100
-        and point_like_score > 0.5
-    ):
+    # A low or partial Moon can have a dark face while still filling a large,
+    # round area of the frame.  Its overall bright-pixel fraction is therefore
+    # much lower than a full Moon's and can otherwise resemble a smooth galaxy.
+    # Check its resolved limb before evaluating diffuse deep-sky structures.
+    if lunar_disc_score >= 0.55:
         return "moon"
 
     # A galaxy needs more than a bright centre: its extended light should be
@@ -179,6 +161,93 @@ def get_point_like_score(gray):
     aspect_ratio = min(bbox_width, bbox_height) / max(bbox_width, bbox_height) if max(bbox_width, bbox_height) else 0.0
 
     return min(1.0, compactness * 0.7 + aspect_ratio * 0.3)
+
+
+def get_lunar_disc_score(gray):
+    """Score a large, resolved, nearly circular bright foreground body.
+
+    This deliberately measures the connected shape of the lunar surface, not
+    just its illuminated fraction.  A crescent or eclipsed Moon can be mostly
+    dark, but its visible face still forms a broad round region; galaxies are
+    normally much smaller in the frame and have a more elongated halo.
+    """
+    max_dimension = 500
+    width, height = gray.size
+    if max(width, height) > max_dimension:
+        scale = max_dimension / max(width, height)
+        gray = gray.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+
+    width, height = gray.size
+    if width < 30 or height < 30:
+        return 0.0
+
+    pixels = list(gray.getdata())
+    sky_level = sorted(pixels)[len(pixels) // 2]
+    peak = max(pixels)
+    if peak - sky_level < 55:
+        return 0.0
+
+    # Include the dim lunar face while excluding the black sky.  Using a
+    # fraction of the scene's usable range makes this work for both bright
+    # crescents and deliberately underexposed lunar images.
+    threshold = sky_level + max(12, int((peak - sky_level) * 0.13))
+    active = [value >= threshold for value in pixels]
+    visited = bytearray(width * height)
+    largest = None
+
+    for start, is_active in enumerate(active):
+        if not is_active or visited[start]:
+            continue
+
+        stack = [start]
+        visited[start] = 1
+        count = 0
+        min_x = max_x = start % width
+        min_y = max_y = start // width
+
+        while stack:
+            index = stack.pop()
+            x = index % width
+            y = index // width
+            count += 1
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+
+            for neighbor_y in range(max(0, y - 1), min(height, y + 2)):
+                row_start = neighbor_y * width
+                for neighbor_x in range(max(0, x - 1), min(width, x + 2)):
+                    neighbor = row_start + neighbor_x
+                    if active[neighbor] and not visited[neighbor]:
+                        visited[neighbor] = 1
+                        stack.append(neighbor)
+
+        if largest is None or count > largest[0]:
+            largest = (count, min_x, min_y, max_x, max_y)
+
+    if largest is None:
+        return 0.0
+
+    count, min_x, min_y, max_x, max_y = largest
+    bbox_width = max_x - min_x + 1
+    bbox_height = max_y - min_y + 1
+    bbox_area = bbox_width * bbox_height
+    image_area = width * height
+    area_fraction = count / image_area
+    fill_ratio = count / bbox_area
+    aspect_ratio = min(bbox_width, bbox_height) / max(bbox_width, bbox_height)
+
+    # The object needs to be a genuinely resolved body, rather than a compact
+    # galaxy or a point source.  A partially lit lunar disc need not fill its
+    # bounding box completely, hence the deliberately tolerant fill score.
+    area_score = min(1.0, area_fraction / 0.10)
+    fill_score = min(1.0, max(0.0, (fill_ratio - 0.32) / 0.38))
+    round_score = min(1.0, max(0.0, (aspect_ratio - 0.62) / 0.30))
+    return area_score * 0.40 + fill_score * 0.30 + round_score * 0.30
 
 
 def get_extended_halo_score(gray):

@@ -4,8 +4,10 @@ from PIL import Image
 import main
 import calibrate
 import galaxy
+import moon
 import nebula
 import planet
+import quality
 
 
 def test_crop_around_object_returns_tighter_region():
@@ -66,6 +68,102 @@ def test_galaxy_structure_score_prefers_elliptical_smooth_halo():
 
     assert main.get_galaxy_structure_score(galaxy_like) >= 0.42
     assert main.get_galaxy_structure_score(nebula_like) < 0.42
+
+
+def test_lunar_disc_score_recognizes_a_shadowed_resolved_moon():
+    moon_like = Image.new("L", (220, 300), 4)
+    center_x, center_y, radius = 110, 170, 78
+
+    for x in range(220):
+        for y in range(300):
+            distance_squared = (x - center_x) ** 2 + (y - center_y) ** 2
+            if distance_squared <= radius ** 2:
+                # The dim face should be retained even though only the lower
+                # edge is strongly illuminated, like a low-exposure crescent.
+                value = 34
+                if y > center_y + 30:
+                    value = 225
+                moon_like.putpixel((x, y), value)
+
+    assert main.get_lunar_disc_score(moon_like) >= 0.55
+
+
+def test_compact_saturn_like_target_is_detected_as_a_planet(tmp_path):
+    image = Image.new("RGB", (300, 400), (2, 2, 2))
+    for x in range(130, 170):
+        for y in range(194, 207):
+            # A small, horizontally extended target approximates Saturn and
+            # its rings while remaining far too small to be a lunar disc.
+            ellipse = ((x - 150) / 20) ** 2 + ((y - 200) / 6) ** 2
+            if ellipse <= 1:
+                image.putpixel((x, y), (245, 210, 150))
+
+    image_path = tmp_path / "saturn.png"
+    image.save(image_path)
+
+    assert main.detect_image_type(image_path) == "planet"
+
+
+def test_moon_enhancement_preserves_source_colour():
+    image = Image.new("RGB", (40, 40), (4, 4, 4))
+    for x in range(10, 30):
+        for y in range(10, 30):
+            image.putpixel((x, y), (130 + x, 85 + y, 55))
+
+    processed = moon.enhance_moon(image, 1.0, 1.0, 1.0, 1.0)
+
+    assert processed.mode == "RGB"
+    red, green, blue = processed.getpixel((20, 20))
+    assert red > green > blue
+
+
+def test_recommendations_rank_five_image_driven_actions_for_overexposed_moon():
+    issues = {
+        "Overexposed": "Severe",
+        "Atmospheric dispersion": "Moderate",
+        "Focus quality": "Fair",
+        "Tracking drift": "Low",
+    }
+    summary = {
+        "average_brightness": 185.0,
+        "contrast_spread": 30.0,
+        "bright_object_score": 0.9,
+        "saturation": 0.12,
+        "shadow_ratio": 0.05,
+        "noise_score": 0.15,
+        "color_cast": 0.1,
+    }
+
+    recommendations = quality.build_recommendations(issues, "moon", summary)
+
+    assert len(recommendations) == 5
+    assert len(set(recommendations)) == 5
+    assert "Lower exposure to protect clipped highlights." in recommendations
+    assert "Use a shorter shutter speed to retain bright surface detail." in recommendations
+
+
+def test_recommendations_prioritize_stacking_for_a_faint_noisy_galaxy():
+    issues = {
+        "Overexposed": "None",
+        "Atmospheric dispersion": "Low",
+        "Focus quality": "Low",
+        "Tracking drift": "Moderate",
+    }
+    summary = {
+        "average_brightness": 24.0,
+        "contrast_spread": 20.0,
+        "bright_object_score": 0.08,
+        "saturation": 0.08,
+        "shadow_ratio": 0.72,
+        "noise_score": 0.82,
+        "color_cast": 0.18,
+    }
+
+    recommendations = quality.build_recommendations(issues, "galaxy", summary)
+
+    assert len(recommendations) == 5
+    assert "Stack more frames to improve faint detail and reduce random noise." in recommendations
+    assert "Apply light noise reduction before final sharpening." in recommendations
 
 
 def test_galaxy_enhancement_creates_dark_sky_without_clipping_core():

@@ -36,6 +36,10 @@ def analyze_image_quality(image_path, detected_type=None):
     bright_object_score = get_bright_object_score(gray, threshold=180)
     point_like_score = get_point_like_score(gray)
     edge_strength = get_edge_strength(gray)
+    saturation = get_mean_saturation(image)
+    shadow_ratio = float(np.count_nonzero(gray <= 8)) / max(1, gray.size)
+    noise_score = get_noise_score(gray)
+    color_cast = get_color_cast_score(image)
 
     object_name = classify_object_name(
         detected_type, gray, bright_object_score, point_like_score, average_brightness
@@ -60,6 +64,10 @@ def analyze_image_quality(image_path, detected_type=None):
         "bright_ratio": bright_ratio,
         "bright_object_score": bright_object_score,
         "point_like_score": point_like_score,
+        "saturation": saturation,
+        "shadow_ratio": shadow_ratio,
+        "noise_score": noise_score,
+        "color_cast": color_cast,
     }
     recommendations = build_recommendations(issues, detected_type, summary)
 
@@ -90,7 +98,7 @@ def print_quality_report(analysis):
 
     if analysis["recommendations"]:
         print()
-        print("Recommendation:")
+        print("Top image-driven recommendations:")
         for recommendation in analysis["recommendations"]:
             print(f"✓ {recommendation}")
 
@@ -115,6 +123,28 @@ def get_bright_pixel_ratio(gray, threshold):
 def get_edge_strength(gray):
     edges = Image.fromarray(gray).filter(ImageFilter.FIND_EDGES)
     return float(ImageStat.Stat(edges).mean[0])
+
+
+def get_mean_saturation(image):
+    """Return the average HSV saturation, scaled from 0.0 to 1.0."""
+    saturation = np.array(image.convert("HSV"), dtype=np.uint8)[:, :, 1]
+    return float(saturation.mean()) / 255.0
+
+
+def get_noise_score(gray):
+    """Estimate fine-grain noise without treating broad object detail as noise."""
+    smooth = np.array(
+        Image.fromarray(gray).filter(ImageFilter.GaussianBlur(radius=1.2)),
+        dtype=np.float32,
+    )
+    residual = np.abs(gray.astype(np.float32) - smooth)
+    return min(1.0, float(residual.std()) / 18.0)
+
+
+def get_color_cast_score(image):
+    """Estimate an overall channel imbalance, scaled from 0.0 to 1.0."""
+    channel_means = np.array(image, dtype=np.float32).mean(axis=(0, 1))
+    return min(1.0, float(channel_means.max() - channel_means.min()) / 90.0)
 
 
 def get_bright_object_score(gray, threshold):
@@ -251,61 +281,93 @@ def estimate_confidence(detected_type, bright_object_score, contrast_spread, ave
     return int(min(0.99, score) * 100)
 
 
-def build_recommendations(issues, detected_type, summary):
-    recommendations = []
-    overexposed = issues.get("Overexposed")
-    dispersion = issues.get("Atmospheric dispersion")
-    focus = issues.get("Focus quality")
-    drift = issues.get("Tracking drift")
-    average_brightness = summary.get("average_brightness", 0.0)
-    contrast_spread = summary.get("contrast_spread", 0.0)
-    edge_strength = summary.get("edge_strength", 0.0)
-    bright_object_score = summary.get("bright_object_score", 0.0)
-    point_like_score = summary.get("point_like_score", 0.0)
+RECOMMENDATION_LIBRARY = (
+    ("lower_exposure", "Lower exposure to protect clipped highlights."),
+    ("shorter_shutter", "Use a shorter shutter speed to retain bright surface detail."),
+    ("raise_exposure", "Increase exposure slightly to bring faint signal above the background."),
+    ("stack_frames", "Stack more frames to improve faint detail and reduce random noise."),
+    ("refocus", "Refocus carefully, then use only moderate sharpening."),
+    ("steady_mount", "Use a steadier mount or shorter sub-exposures to limit motion blur."),
+    ("improve_tracking", "Improve tracking alignment to avoid trailing during longer captures."),
+    ("correct_dispersion", "Correct atmospheric color separation before increasing sharpness."),
+    ("higher_altitude", "Capture when the object is higher in the sky for steadier air."),
+    ("video_capture", "Capture a video sequence and keep the sharpest frames."),
+    ("increase_contrast", "Increase local contrast gently to reveal faint structure."),
+    ("preserve_highlights", "Reduce contrast or sharpening slightly around the brightest areas."),
+    ("darker_sky", "Use darker skies or stronger background subtraction to improve contrast."),
+    ("crop_object", "Crop more tightly around the object before enlarging or sharpening."),
+    ("correct_color_cast", "Neutralize the overall color cast before boosting saturation."),
+    ("boost_color", "Apply a modest color boost after contrast adjustment."),
+    ("reduce_saturation", "Reduce saturation slightly to keep color noise under control."),
+    ("denoise", "Apply light noise reduction before final sharpening."),
+    ("calibrate_frames", "Use dark and flat calibration frames to reduce camera artifacts."),
+    ("phase_timing", "Capture near lunar first or last quarter for stronger crater shadows."),
+)
 
-    if detected_type == "moon":
-        if overexposed in {"Moderate", "Severe"} or average_brightness > 170:
-            recommendations.append("Lower exposure to avoid overexposed lunar surface.")
-            recommendations.append("Use a shorter shutter speed because the Moon is very bright.")
-        if focus in {"Fair", "Moderate", "Severe"}:
-            recommendations.append("Increase sharpness moderately to reveal surface details.")
-        if contrast_spread < 45:
-            recommendations.append("Observe near first/last quarter for better crater shadows.")
 
-    elif detected_type == "planet":
-        if dispersion in {"Moderate", "Severe"} or edge_strength < 10:
-            recommendations.append("Reduce chromatic aberration caused by atmospheric dispersion.")
-        if focus in {"Fair", "Moderate", "Severe"} or bright_object_score < 0.6:
-            recommendations.append("Capture a video instead of a single image.")
-        if drift in {"Moderate", "Severe"}:
-            recommendations.append("Observe when the planet is higher above the horizon.")
-        if bright_object_score < 0.75 or point_like_score < 0.65:
-            recommendations.append("Use higher magnification or crop around the planet.")
+def clamp_score(value):
+    return min(1.0, max(0.0, float(value)))
 
-    elif detected_type in {"galaxy", "nebula"}:
-        if average_brightness < 90 or contrast_spread < 55:
-            recommendations.append("Use longer exposure or stack multiple images.")
-        if average_brightness > 120 or bright_object_score < 0.2:
-            recommendations.append("Observe under darker skies with less light pollution.")
-        if drift in {"Moderate", "Severe"} or edge_strength < 8:
-            recommendations.append("Improve tracking accuracy to avoid star trailing.")
-        if contrast_spread < 70:
-            recommendations.append("Increase contrast carefully to preserve faint structures.")
 
-    if overexposed in {"Moderate", "Severe"} and detected_type != "moon":
-        recommendations.append("Lower exposure")
-    if dispersion in {"Moderate", "Severe"} and detected_type != "planet":
-        recommendations.append("Capture video instead of single frame")
-    if focus in {"Fair", "Moderate", "Severe"}:
-        recommendations.append("Refocus and use a steady mount")
-    if drift in {"Moderate", "Severe"} and detected_type not in {"galaxy", "nebula"}:
-        recommendations.append("Observe when the object is higher in the sky")
+def issue_score(issues, name):
+    return {"None": 0.0, "Low": 0.25, "Fair": 0.5, "Moderate": 0.75, "Severe": 1.0}.get(
+        issues.get(name, "None"), 0.0
+    )
 
-    if not recommendations:
-        recommendations.append("Your capture looks good. Keep the current setup and settings.")
 
-    unique = []
-    for recommendation in recommendations:
-        if recommendation not in unique:
-            unique.append(recommendation)
-    return unique
+def recommendation_score(key, issues, detected_type, summary):
+    """Score one recommendation from measured image characteristics.
+
+    Scores intentionally come from image analysis metrics, not a fixed list per
+    object type.  Object type only prevents advice that would not fit a target.
+    """
+    overexposed = issue_score(issues, "Overexposed")
+    dispersion = issue_score(issues, "Atmospheric dispersion")
+    focus = issue_score(issues, "Focus quality")
+    drift = issue_score(issues, "Tracking drift")
+    brightness = summary.get("average_brightness", 0.0)
+    contrast = summary.get("contrast_spread", 0.0)
+    bright_object = summary.get("bright_object_score", 0.0)
+    saturation = summary.get("saturation", 0.0)
+    shadows = summary.get("shadow_ratio", 0.0)
+    noise = summary.get("noise_score", 0.0)
+    color_cast = summary.get("color_cast", 0.0)
+    deep_sky = detected_type in {"galaxy", "nebula"}
+    resolved_body = detected_type in {"moon", "planet"}
+    faintness = clamp_score((90.0 - brightness) / 90.0)
+    low_contrast = clamp_score((65.0 - contrast) / 65.0)
+
+    scores = {
+        "lower_exposure": overexposed,
+        "shorter_shutter": overexposed * (1.0 if resolved_body else 0.25),
+        "raise_exposure": max(faintness, clamp_score((shadows - 0.70) / 0.25)),
+        "stack_frames": max(noise, faintness * 0.85) * (1.0 if deep_sky else 0.55),
+        "refocus": focus,
+        "steady_mount": max(drift, focus * 0.45),
+        "improve_tracking": drift * (1.0 if deep_sky else 0.7),
+        "correct_dispersion": dispersion,
+        "higher_altitude": max(dispersion, drift) * 0.8,
+        "video_capture": max(focus, dispersion) * (1.0 if resolved_body else 0.25),
+        "increase_contrast": low_contrast * (1.0 if deep_sky else 0.6),
+        "preserve_highlights": overexposed * 0.85,
+        "darker_sky": clamp_score((brightness - 95.0) / 100.0) * (1.0 if deep_sky else 0.2),
+        "crop_object": clamp_score((0.70 - bright_object) / 0.70) * (1.0 if resolved_body else 0.55),
+        "correct_color_cast": color_cast,
+        "boost_color": clamp_score((0.18 - saturation) / 0.18) * 0.7,
+        "reduce_saturation": clamp_score((saturation - 0.65) / 0.25) * 0.7,
+        "denoise": noise,
+        "calibrate_frames": max(noise * 0.8, color_cast * 0.6) * (1.0 if deep_sky else 0.45),
+        "phase_timing": low_contrast * (1.0 if detected_type == "moon" else 0.0),
+    }
+    return clamp_score(scores[key])
+
+
+def build_recommendations(issues, detected_type, summary, limit=5):
+    """Rank the image-driven recommendation library and return the best five."""
+    ranked = []
+    for position, (key, text) in enumerate(RECOMMENDATION_LIBRARY):
+        score = recommendation_score(key, issues, detected_type, summary)
+        ranked.append((score, position, text))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [text for _, _, text in ranked[:limit]]
