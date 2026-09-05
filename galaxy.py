@@ -160,9 +160,14 @@ def get_color_strength(rgb):
 
 
 def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, background, noise_reduction=0.55):
-    """Reveal a faint galaxy through background extraction and an asinh stretch."""
+    """Reveal galaxy structure without turning the sky background into grit.
+
+    This is deliberately a conservative, data-preserving stretch.  It can make
+    real colour and dust lanes easier to see, but it cannot manufacture the
+    fine structure present only in a longer, stacked exposure.
+    """
     original = np.asarray(image.convert("RGB"), dtype=np.float32)
-    sky_floor = min(max(background, 0.0), 1.0) * 3.0
+    sky_floor = min(max(background, 0.0), 1.0) * 4.0
     signal = subtract_sky_background(original, sky_floor)
     luminance = (
         signal[:, :, 0] * 0.2126
@@ -173,7 +178,7 @@ def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, backgro
     # The raw frame is dominated by a pink sky.  After subtracting that sky,
     # an asinh stretch lifts the faint outer arms while compressing the bright
     # nucleus and stars instead of clipping them.
-    white_point = max(12.0, float(np.percentile(luminance, 99.95)))
+    white_point = max(12.0, float(np.percentile(luminance, 99.9)))
     shadow_lift = min(max(shadow_lift, 0.8), 1.5)
     stretch_strength = 3.5 + (shadow_lift - 1.0) * 6.0
     stretched = np.arcsinh(signal / white_point * stretch_strength)
@@ -185,10 +190,10 @@ def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, backgro
     # and strong dust-lane edges remain from the unblurred image.
     noise_reduction = min(max(noise_reduction, 0.0), 1.0)
     denoised_rgb = cv2.fastNlMeansDenoisingColored(
-        stretched_rgb, None, h=10, hColor=12, templateWindowSize=7, searchWindowSize=21
+        stretched_rgb, None, h=7, hColor=8, templateWindowSize=7, searchWindowSize=21
     )
     stretched_luminance = cv2.cvtColor(stretched_rgb, cv2.COLOR_RGB2GRAY)
-    denoise_mask = np.clip((200.0 - stretched_luminance) / 145.0, 0.0, 1.0)
+    denoise_mask = np.clip((145.0 - stretched_luminance) / 105.0, 0.0, 1.0)
     denoise_mask *= noise_reduction
     stretched_rgb = np.clip(
         stretched_rgb * (1.0 - denoise_mask[:, :, None])
@@ -197,29 +202,81 @@ def enhance_galaxy(image, shadow_lift, local_contrast, color, sharpness, backgro
         255,
     ).astype(np.uint8)
 
-    # Use CLAHE only as a restrained luminance-only adjustment.  This enhances
-    # dust lanes while retaining the colour relationships in the RGB data.
+    # Use CLAHE only as a very restrained luminance-only adjustment.  Applying
+    # it strongly across the whole frame was amplifying sensor noise into the
+    # mottled, sandy background seen in the previous output.
     lab = cv2.cvtColor(stretched_rgb, cv2.COLOR_RGB2LAB)
-    local_contrast = min(max(local_contrast, 0.5), 2.0)
-    clahe = cv2.createCLAHE(clipLimit=local_contrast, tileGridSize=(8, 8))
+    local_contrast = min(max(local_contrast, 0.5), 1.5)
+    clahe = cv2.createCLAHE(clipLimit=local_contrast, tileGridSize=(16, 16))
     clahe_luminance = clahe.apply(lab[:, :, 0])
-    detail_mask = np.clip((220.0 - lab[:, :, 0]) / 180.0, 0.0, 1.0) * 0.35
+    detail_mask = np.clip((185.0 - lab[:, :, 0]) / 145.0, 0.0, 1.0) * 0.18
     lab[:, :, 0] = np.clip(
         lab[:, :, 0] * (1.0 - detail_mask) + clahe_luminance * detail_mask,
         0,
         255,
     ).astype(np.uint8)
 
-    enhanced = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
-    enhanced = ImageEnhance.Color(enhanced).enhance(min(max(color, 0.8), 1.3))
+    enhanced_rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB).astype(np.float32)
+    enhanced_rgb = apply_galaxy_colour_balance(enhanced_rgb)
+    enhanced = Image.fromarray(enhanced_rgb.astype(np.uint8))
+    enhanced = ImageEnhance.Color(enhanced).enhance(min(max(color, 0.8), 1.45))
     enhanced = ImageEnhance.Sharpness(enhanced).enhance(min(max(sharpness, 0.8), 1.2))
     return enhanced
 
 
 def subtract_sky_background(image_array, target_sky_level=3.0):
-    """Remove the dominant RGB sky cast using a robust low-percentile sample."""
-    sky_rgb = np.percentile(image_array.reshape(-1, 3), 20, axis=0)
-    return np.clip(image_array - sky_rgb + target_sky_level, 0, 255)
+    """Remove sky cast and broad gradients using only likely-sky pixels.
+
+    A single global percentile makes one side of a vignetted frame black and
+    leaves a colour cast on the other.  A robust per-channel plane gives a
+    smooth dark sky while leaving the extended galaxy signal intact.
+    """
+    height, width = image_array.shape[:2]
+    luminance = cv2.cvtColor(image_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    sky_limit = np.percentile(luminance, 45)
+    mask = luminance <= sky_limit
+    y, x = np.nonzero(mask)
+
+    if len(x) < 100:
+        sky_rgb = np.percentile(image_array.reshape(-1, 3), 20, axis=0)
+        return np.clip(image_array - sky_rgb + target_sky_level, 0, 255)
+
+    # Fit at most 20k points: enough for a stable background plane without
+    # slowing down large camera frames.
+    step = max(1, len(x) // 20000)
+    sample_x = x[::step]
+    sample_y = y[::step]
+    x_normalized = sample_x.astype(np.float32) / max(width - 1, 1)
+    y_normalized = sample_y.astype(np.float32) / max(height - 1, 1)
+    design = np.column_stack((np.ones_like(x_normalized), x_normalized, y_normalized))
+    background = np.empty_like(image_array)
+    grid_y, grid_x = np.mgrid[0:height, 0:width]
+    grid_design = np.column_stack((
+        np.ones(height * width, dtype=np.float32),
+        (grid_x.reshape(-1) / max(width - 1, 1)).astype(np.float32),
+        (grid_y.reshape(-1) / max(height - 1, 1)).astype(np.float32),
+    ))
+    for channel in range(3):
+        values = image_array[sample_y, sample_x, channel]
+        coefficients, _, _, _ = np.linalg.lstsq(design, values, rcond=None)
+        background[:, :, channel] = (grid_design @ coefficients).reshape(height, width)
+
+    return np.clip(image_array - background + target_sky_level, 0, 255)
+
+
+def apply_galaxy_colour_balance(rgb):
+    """Neutralize residual sky cast with a small, cool deep-sky bias."""
+    luminance = cv2.cvtColor(np.clip(rgb, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    sky = rgb[luminance < np.percentile(luminance, 45)]
+    if len(sky) == 0:
+        return np.clip(rgb, 0, 255)
+
+    sky_median = np.maximum(np.median(sky, axis=0), 1.0)
+    neutral = np.exp(np.mean(np.log(sky_median)))
+    scale = np.clip(neutral / sky_median, 0.85, 1.18)
+    # Keep calibration modest: real galaxy colour remains data-driven.
+    scale *= np.array((0.98, 1.0, 1.05), dtype=np.float32)
+    return np.clip(rgb * scale, 0, 255)
 
 
 def darken_background(image, background):
